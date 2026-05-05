@@ -1302,6 +1302,44 @@ test("buildFastRestoreScript validates bundle runtime marker before legacy npm d
   );
 });
 
+test("buildFastRestoreScript recreates bundle compatibility shims before gateway launch", () => {
+  const script = buildFastRestoreScript();
+
+  assert.ok(
+    script.includes("fast_restore.compatibility_shims_ready"),
+    "expected compatibility shim readiness event",
+  );
+  assert.ok(
+    script.includes("agents/model-catalog.runtime.js"),
+    "expected model-catalog compatibility shim",
+  );
+  assert.ok(
+    script.includes("export * from '../run-model-catalog.runtime.js';"),
+    "expected model-catalog shim export",
+  );
+  assert.ok(
+    script.includes("config/config.js"),
+    "expected config compatibility shim",
+  );
+  assert.ok(
+    script.includes("getRuntimeConfig as i"),
+    "expected config IO chunk detection",
+  );
+  assert.ok(
+    script.includes("replaceConfigFile as r"),
+    "expected config mutation chunk detection",
+  );
+  assert.ok(
+    script.includes("CONFIG_PATH as t"),
+    "expected config paths chunk detection",
+  );
+
+  const shims = script.indexOf("fast_restore.compatibility_shims_ready");
+  const gatewayStart = script.indexOf('{"event":"fast_restore.start_gateway"}');
+  assert.ok(shims >= 0, "compatibility shim block must exist");
+  assert.ok(gatewayStart > shims, "compatibility shims must be created before gateway launch");
+});
+
 // ---------------------------------------------------------------------------
 // buildFastRestoreScript — stale snapshot invariant (host-scheduler)
 // ---------------------------------------------------------------------------

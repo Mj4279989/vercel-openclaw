@@ -117,6 +117,44 @@ function readBooleanEnv(name: string, defaultValue = false): boolean {
 
 const AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 
+function buildBundleCompatibilityShimShell(): string {
+  return [
+    '# Bundle compatibility shims: persistent sandboxes can resume with fresh',
+    '# bundle assets but without wrapper files normally created by bootstrap.',
+    `if [ -f "${OPENCLAW_BUNDLE_PATH}" ]; then`,
+    '  ROOT=/home/vercel-sandbox',
+    '  mkdir -p "$ROOT/agents" "$ROOT/config"',
+    '  if grep -Rqs \'./agents/model-catalog.runtime.js\' "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null; then',
+    '    if [ ! -f "$ROOT/run-model-catalog.runtime.js" ]; then',
+    '      echo \'{"event":"fast_restore.missing_compatibility_source","shim":"agents/model-catalog.runtime.js","source":"run-model-catalog.runtime.js"}\' >&2',
+    '      exit 1',
+    '    fi',
+    '    cat > "$ROOT/agents/model-catalog.runtime.js" <<\'EOF\'',
+    "export * from '../run-model-catalog.runtime.js';",
+    'EOF',
+    '  fi',
+    '  if grep -Rqs \'./config/config.js\' "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null; then',
+    '    io_module=$(grep -l \'getRuntimeConfig as i\' "$ROOT"/io-*.js 2>/dev/null | head -n 1 || true)',
+    '    mutate_module=$(grep -l \'replaceConfigFile as r\' "$ROOT"/mutate-*.js 2>/dev/null | head -n 1 || true)',
+    '    paths_module=$(grep -l \'CONFIG_PATH as t\' "$ROOT"/paths-*.js 2>/dev/null | head -n 1 || true)',
+    '    if [ -z "$io_module" ] || [ -z "$mutate_module" ] || [ -z "$paths_module" ]; then',
+    '      echo \'{"event":"fast_restore.missing_compatibility_source","shim":"config/config.js","source":"shared-config-chunks"}\' >&2',
+    '      exit 1',
+    '    fi',
+    '    io_base=$(basename "$io_module")',
+    '    mutate_base=$(basename "$mutate_module")',
+    '    paths_base=$(basename "$paths_module")',
+    '    cat > "$ROOT/config/config.js" <<EOF',
+    "export { A as applyConfigOverrides, C as validateConfigObjectRaw, S as validateConfigObject, T as validateConfigObjectWithPlugins, U as formatInvalidConfigDetails, a as loadConfig, b as writeConfigFile, d as readConfigFileSnapshotForWrite, f as readConfigFileSnapshotWithPluginMetadata, i as getRuntimeConfig, l as readBestEffortConfig, n as clearConfigCache, r as createConfigIO, u as readConfigFileSnapshot, v as registerConfigWriteListener, x as collectUnsupportedSecretRefPolicyIssues, y as resolveConfigSnapshotHash } from '../$io_base';",
+    "export { n as mutateConfigFile, r as replaceConfigFile, t as ConfigMutationConflictError } from '../$mutate_base';",
+    "export { _ as resolveOAuthPath, a as resolveCanonicalConfigPath, c as resolveDefaultConfigCandidates, d as resolveIncludeRoots, f as resolveIsNixMode, g as resolveOAuthDir, h as resolveNewStateDir, i as isNixMode, l as resolveGatewayLockDir, m as resolveLegacyStateDirs, n as DEFAULT_GATEWAY_PORT, o as resolveConfigPath, p as resolveLegacyStateDir, r as STATE_DIR, s as resolveConfigPathCandidate, t as CONFIG_PATH, u as resolveGatewayPort, v as resolveStateDir } from '../$paths_base';",
+    'EOF',
+    '  fi',
+    '  echo \'{"event":"fast_restore.compatibility_shims_ready"}\' >&2',
+    'fi',
+  ].join("\n");
+}
+
 /**
  * Shell fragment that ensures OPENCLAW_GATEWAY_PORT is in the shell profile
  * so CLI tools (openclaw cron list, etc.) and agent-spawned tool processes
@@ -851,6 +889,7 @@ export NODE_OPTIONS="\${NODE_OPTIONS:-} --require=${OPENCLAW_NET_LEARN_PATH}"
 	    exit 1
 	  fi
 	fi
+${buildBundleCompatibilityShimShell()}
 # Snapshot invariant: reject snapshots that still contain the stale
 # host-scheduler skill.  It told the agent "the cron tool is disabled"
 # and directed it to a removed script.  The native cron tool works

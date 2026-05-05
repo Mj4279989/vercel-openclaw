@@ -77,6 +77,40 @@ async function assertCommandSuccess(
   }
 }
 
+function buildBundleCompatibilityShimScript(): string {
+  return [
+    "set -e",
+    "ROOT=/home/vercel-sandbox",
+    "mkdir -p \"$ROOT/agents\" \"$ROOT/config\"",
+    "if grep -Rqs './agents/model-catalog.runtime.js' \"$ROOT\"/*.js \"$ROOT\"/*/*.js 2>/dev/null; then",
+    "  if [ ! -f \"$ROOT/run-model-catalog.runtime.js\" ]; then",
+    "    echo 'missing run-model-catalog.runtime.js for agents/model-catalog.runtime.js shim' >&2",
+    "    exit 1",
+    "  fi",
+    "  cat > \"$ROOT/agents/model-catalog.runtime.js\" <<'EOF'",
+    "export * from '../run-model-catalog.runtime.js';",
+    "EOF",
+    "fi",
+    "if grep -Rqs './config/config.js' \"$ROOT\"/*.js \"$ROOT\"/*/*.js 2>/dev/null; then",
+    "  io_module=$(grep -l 'getRuntimeConfig as i' \"$ROOT\"/io-*.js 2>/dev/null | head -n 1 || true)",
+    "  mutate_module=$(grep -l 'replaceConfigFile as r' \"$ROOT\"/mutate-*.js 2>/dev/null | head -n 1 || true)",
+    "  paths_module=$(grep -l 'CONFIG_PATH as t' \"$ROOT\"/paths-*.js 2>/dev/null | head -n 1 || true)",
+    "  if [ -z \"$io_module\" ] || [ -z \"$mutate_module\" ] || [ -z \"$paths_module\" ]; then",
+    "    echo 'missing shared config chunks for config/config.js shim' >&2",
+    "    exit 1",
+    "  fi",
+    "  io_base=$(basename \"$io_module\")",
+    "  mutate_base=$(basename \"$mutate_module\")",
+    "  paths_base=$(basename \"$paths_module\")",
+    "  cat > \"$ROOT/config/config.js\" <<EOF",
+    "export { A as applyConfigOverrides, C as validateConfigObjectRaw, S as validateConfigObject, T as validateConfigObjectWithPlugins, U as formatInvalidConfigDetails, a as loadConfig, b as writeConfigFile, d as readConfigFileSnapshotForWrite, f as readConfigFileSnapshotWithPluginMetadata, i as getRuntimeConfig, l as readBestEffortConfig, n as clearConfigCache, r as createConfigIO, u as readConfigFileSnapshot, v as registerConfigWriteListener, x as collectUnsupportedSecretRefPolicyIssues, y as resolveConfigSnapshotHash } from '../$io_base';",
+    "export { n as mutateConfigFile, r as replaceConfigFile, t as ConfigMutationConflictError } from '../$mutate_base';",
+    "export { _ as resolveOAuthPath, a as resolveCanonicalConfigPath, c as resolveDefaultConfigCandidates, d as resolveIncludeRoots, f as resolveIsNixMode, g as resolveOAuthDir, h as resolveNewStateDir, i as isNixMode, l as resolveGatewayLockDir, m as resolveLegacyStateDirs, n as DEFAULT_GATEWAY_PORT, o as resolveConfigPath, p as resolveLegacyStateDir, r as STATE_DIR, s as resolveConfigPathCandidate, t as CONFIG_PATH, u as resolveGatewayPort, v as resolveStateDir } from '../$paths_base';",
+    "EOF",
+    "fi",
+  ].join("\n");
+}
+
 export type BootstrapRuntime = {
   packageSpec: string;
   installedVersion: string | null;
@@ -279,7 +313,8 @@ export async function setupOpenClaw(
         [
           "set -e",
           `curl -fsSL --max-time 60 --connect-timeout 10 ${JSON.stringify(sharedChunksUrl)} | tar xz -C /home/vercel-sandbox`,
-        ].join(" && "),
+          buildBundleCompatibilityShimScript(),
+        ].join("\n"),
       ],
       stdout: progress?.makeWritable("stdout"),
       stderr: progress?.makeWritable("stderr"),

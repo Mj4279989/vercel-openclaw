@@ -219,6 +219,52 @@ test("setupOpenClaw extracts bundle workspace templates into runtime working tre
   });
 });
 
+test("setupOpenClaw creates bundle compatibility shims after shared chunks extraction", async () => {
+  await withEnv({ OPENCLAW_BUNDLE_URL: "https://example.test/openclaw.bundle.mjs" }, async () => {
+    const h = createScenarioHarness();
+    try {
+      const handle = await createHandle(h);
+
+      await setupOpenClaw(handle, {
+        gatewayToken: "tok-bundle-shims",
+        proxyOrigin: "https://example.com",
+      });
+
+      const sharedChunks = handle.commands.find(
+        (c) => c.cmd === "bash" && c.args?.[1]?.includes("channel-shared-chunks.tar.gz"),
+      );
+      assert.ok(sharedChunks, "bundle command should fetch shared chunks");
+      const script = sharedChunks.args?.[1] ?? "";
+      assert.ok(
+        script.includes("agents/model-catalog.runtime.js"),
+        "shared chunks setup should create model-catalog compatibility shim",
+      );
+      assert.ok(
+        script.includes("config/config.js"),
+        "shared chunks setup should create config compatibility shim",
+      );
+      assert.ok(
+        script.includes("run-model-catalog.runtime.js"),
+        "model-catalog shim should point to extracted root runtime",
+      );
+      assert.ok(
+        script.includes("getRuntimeConfig as i"),
+        "config shim should select the config IO chunk by export signature",
+      );
+      assert.ok(
+        script.includes("replaceConfigFile as r"),
+        "config shim should select the mutation chunk by export signature",
+      );
+      assert.ok(
+        script.includes("CONFIG_PATH as t"),
+        "config shim should select the gateway path chunk by export signature",
+      );
+    } finally {
+      h.teardown();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // setupOpenClaw — written files
 // ---------------------------------------------------------------------------

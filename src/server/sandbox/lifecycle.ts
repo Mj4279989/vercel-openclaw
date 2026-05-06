@@ -971,7 +971,98 @@ export async function getSandboxDomain(port = OPENCLAW_PORT): Promise<string> {
       [String(port)]: domain,
     };
   });
+  logInfo("sandbox.port_urls.refreshed", {
+    port,
+    newUrl: domain,
+    sandboxId: meta.sandboxId,
+    source: "cache_miss",
+  });
   return domain;
+}
+
+/**
+ * The cached public URL for a sandbox port is dead — Vercel returned
+ * SANDBOX_NOT_LISTENING for the cached `sb-XXX.vercel.run`. Clear the
+ * cache so the next `getSandboxDomain()` call re-fetches via the SDK,
+ * and reconcile sandbox liveness in case Vercel has suspended it.
+ *
+ * The expected sandboxId guard prevents us from clobbering a fresh URL
+ * that another concurrent reconcile/restart already wrote.
+ */
+export async function markSandboxPortUrlStale(
+  expectedSandboxId: string | null,
+  port: number = OPENCLAW_PORT,
+  reason: string = "sandbox-not-listening",
+): Promise<{ refreshed: boolean; oldUrl: string | null; newUrl: string | null }> {
+  let oldUrl: string | null = null;
+  let currentSandboxId: string | null = null;
+  let skipReason: string | null = null;
+
+  await mutateMeta((next) => {
+    currentSandboxId = next.sandboxId;
+    if (!next.sandboxId) {
+      skipReason = "no_sandbox";
+      return;
+    }
+    if (expectedSandboxId && expectedSandboxId !== next.sandboxId) {
+      skipReason = "sandbox_id_mismatch";
+      return;
+    }
+    const portKey = String(port);
+    oldUrl = next.portUrls?.[portKey] ?? null;
+    if (!next.portUrls || !(portKey in next.portUrls)) {
+      // Already cleared by a concurrent call; nothing to do.
+      return;
+    }
+    const remaining = { ...next.portUrls };
+    delete remaining[portKey];
+    next.portUrls = Object.keys(remaining).length === 0 ? null : remaining;
+  });
+
+  if (skipReason) {
+    logWarn("sandbox.port_url_dead.skipped", {
+      reason,
+      port,
+      why: skipReason,
+      expectedSandboxId,
+      currentSandboxId,
+    });
+    return { refreshed: false, oldUrl, newUrl: null };
+  }
+
+  logWarn("sandbox.port_url_dead", {
+    port,
+    cachedUrl: oldUrl,
+    sandboxId: currentSandboxId,
+    reason,
+  });
+
+  // Reconcile sandbox status — if Vercel has suspended/destroyed the
+  // sandbox out from under us, the next forward will fail fast on
+  // SANDBOX_NOT_RUNNING instead of probing a phantom URL.
+  try {
+    await reconcileStaleRunningStatus();
+  } catch (err) {
+    logWarn("sandbox.port_url_dead.reconcile_failed", {
+      sandboxId: currentSandboxId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Refresh the URL via SDK so the caller can immediately retry with a
+  // fresh value. May be the same URL — that's fine; we've still cleared
+  // the stale cache and reconciled status.
+  try {
+    const newUrl = await getSandboxDomain(port);
+    return { refreshed: true, oldUrl, newUrl };
+  } catch (err) {
+    logWarn("sandbox.port_url_dead.refresh_failed", {
+      sandboxId: currentSandboxId,
+      port,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { refreshed: false, oldUrl, newUrl: null };
+  }
 }
 
 /**
@@ -1025,12 +1116,18 @@ export async function syncGatewayConfigToSandbox(): Promise<LiveConfigSyncResult
     // Restart the gateway so new HTTP route handlers are registered.
     // Without this, hot-reload restarts the channel provider but does not
     // wire up new routes like /slack/events.
+    const restartStartedAt = Date.now();
+    logInfo("gateway.restart_started", {
+      sandboxId,
+      reason: "config-sync",
+    });
     try {
       await restartGateway(sandbox);
     } catch (restartErr) {
       logWarn("sandbox.config_sync_restart_failed", {
         sandboxId,
         error: restartErr instanceof Error ? restartErr.message : String(restartErr),
+        durationMs: Date.now() - restartStartedAt,
       });
       return {
         outcome: "degraded",
@@ -1038,6 +1135,31 @@ export async function syncGatewayConfigToSandbox(): Promise<LiveConfigSyncResult
         liveConfigFresh: false,
         operatorMessage: "Credentials were saved, but the running sandbox did not restart cleanly. Live routes may still be stale until the next successful restart.",
       };
+    }
+    logInfo("gateway.restart_completed", {
+      sandboxId,
+      durationMs: Date.now() - restartStartedAt,
+      reason: "config-sync",
+    });
+
+    // Invalidate cached port URLs. Even if `sandbox.domain(port)` returns
+    // the same URL after restart, clearing the cache forces a fresh
+    // observation on the next forward (logged via getSandboxDomain) — and
+    // catches the case where Vercel rotated the public tunnel URL across
+    // the restart.
+    let invalidatedPortUrls: Record<string, string> | null = null;
+    await mutateMeta((next) => {
+      if (next.sandboxId !== sandboxId) return;
+      if (!next.portUrls) return;
+      invalidatedPortUrls = { ...next.portUrls };
+      next.portUrls = null;
+    });
+    if (invalidatedPortUrls) {
+      logInfo("sandbox.port_urls.invalidated", {
+        sandboxId,
+        reason: "gateway-restart",
+        oldUrls: invalidatedPortUrls,
+      });
     }
 
     // Poll for gateway readiness after restart, then verify configured channel

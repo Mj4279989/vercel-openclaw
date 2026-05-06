@@ -92,6 +92,54 @@ export type ChannelConfigs = {
   whatsapp: WhatsAppChannelConfig | null;
 };
 
+/**
+ * Most-recent forward attempt result, recorded per inbound webhook.
+ *
+ * Operator surfaces (e.g. /api/channels/summary readiness) read this to
+ * report ongoing delivery health, distinct from the one-shot config-sync
+ * outcome captured in {@link SlackLiveConfigSyncState}. A failed forward
+ * after a successful config-sync is the signal that something has gone
+ * stale (sandbox suspended, public URL dead, plugin not registered).
+ */
+export type ChannelLastForward = {
+  ok: boolean;
+  status: number | null;
+  /**
+   * One of the forward classifier values:
+   *   "accepted" | "handler-not-ready" | "sandbox-not-listening" |
+   *   "proxy-error" | "fetch-exception" | "handler-error" |
+   *   "swallowed-by-base-server" | "exhausted"
+   */
+  classification: string;
+  attempts: number;
+  totalMs: number;
+  transport: "public" | "local" | null;
+  /** Cached sandbox public URL used for the last attempt, or null when unknown. */
+  sandboxUrl: string | null;
+  /** Sandbox ID at forward time, or null. */
+  sandboxId: string | null;
+  /** First ~200 chars of the final attempt's response body (debugging aid). */
+  finalReasonHead: string | null;
+  startedAt: number;
+  completedAt: number;
+  deliveryId: string | null;
+};
+
+export type ChannelDiagnostics = Partial<Record<ChannelName, { lastForward?: ChannelLastForward }>>;
+
+export function isChannelLastForward(value: unknown): value is ChannelLastForward {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const raw = value as Partial<ChannelLastForward>;
+  return (
+    typeof raw.ok === "boolean" &&
+    typeof raw.classification === "string" &&
+    typeof raw.attempts === "number" &&
+    typeof raw.totalMs === "number" &&
+    typeof raw.startedAt === "number" &&
+    typeof raw.completedAt === "number"
+  );
+}
+
 export function createDefaultChannelConfigs(): ChannelConfigs {
   return {
     slack: null,

@@ -193,6 +193,7 @@ export async function runWithBootMessages<
   const deadline = Date.now() + timeoutMs;
 
   try {
+    try {
     for (;;) {
       const result = await ensureSandboxRunning({ origin, reason });
       const meta = result.meta;
@@ -256,6 +257,39 @@ export async function runWithBootMessages<
       }
 
       await sleep(pollIntervalMs);
+    }
+    } catch (loopError) {
+      // The boot-message poll loop has thrown — the caller will get a
+      // workflow-level retry/terminal message, but if this is a sandbox-
+      // start failure (timeout or "error" state), the user has been
+      // staring at "🦞 Verifying config…" / "🦞 Starting OpenClaw…" the
+      // whole time. Push ONE final synchronous chat.update with a
+      // diagnostic message so the placeholder reflects reality before
+      // the error propagates to the workflow's own catch handler.
+      const errMsg =
+        loopError instanceof Error ? loopError.message : String(loopError);
+      const finalText = `🛑 Sandbox failed to start. Last status: ${
+        lastStatus ?? "unknown"
+      }. Run \`vclaw doctor\` or check admin logs.`;
+      try {
+        await handle.update(finalText);
+      } catch (updateError) {
+        logWarn("channels.boot_message_final_error_update_failed", {
+          channel,
+          lastStatus,
+          loopError: errMsg,
+          updateError:
+            updateError instanceof Error
+              ? updateError.message
+              : String(updateError),
+        });
+      }
+      logWarn("channels.boot_message_loop_failed", {
+        channel,
+        lastStatus,
+        error: errMsg,
+      });
+      throw loopError;
     }
   } finally {
     // Caller opts out when it wants to keep the boot message alive past

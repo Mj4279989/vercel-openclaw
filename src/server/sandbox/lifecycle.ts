@@ -24,6 +24,7 @@ import { applyFirewallPolicyToSandbox, toNetworkPolicy } from "@/server/firewall
 import { logError, logInfo, logWarn } from "@/server/log";
 import { setupOpenClaw, CommandFailedError } from "@/server/openclaw/bootstrap";
 import {
+  buildClearStaleGatewayLockShell,
   computeGatewayConfigHash,
   GATEWAY_CONFIG_HASH_VERSION,
   OPENCLAW_BIN,
@@ -2978,6 +2979,28 @@ async function createAndBootstrapSandboxWithinLifecycleLock(
 
       progress.setPhase("starting-gateway", "Running fast restore script");
       const READINESS_TIMEOUT_SECONDS = 30;
+
+      // Defensive pre-step: clear gateway lockfiles whose owner PID is dead.
+      // The bundle's fast-restore.sh acquires a lock that can be left over
+      // from a previous VM after snapshot/warm-restore. The PID inside is
+      // dead in the new sandbox, but the lock-acquisition still waits ~5s
+      // for that "owner" before giving up — leaving the gateway un-started
+      // and the Slack workflow showing "Verifying config…" until it hits
+      // its 120s readiness timeout. Best-effort; never fails the restore.
+      try {
+        await sandbox.runCommand("bash", [
+          "-c",
+          `set +e\n${buildClearStaleGatewayLockShell()}\nexit 0`,
+        ]);
+      } catch (lockClearError) {
+        logWarn("sandbox.restore.stale_lock_pre_clear_failed", {
+          error:
+            lockClearError instanceof Error
+              ? lockClearError.message
+              : String(lockClearError),
+        });
+      }
+
       const fastRestoreStart = Date.now();
       const restoreResult = await sandbox.runCommand({
         cmd: "bash",

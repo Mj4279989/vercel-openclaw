@@ -282,6 +282,50 @@ if (typeof globalThis.fetch === "function") {
 NETLEARNEOF`;
 }
 
+/**
+ * Shell fragment that defensively clears stale gateway lockfiles whose
+ * recorded PID is no longer alive in the current sandbox.
+ *
+ * After a snapshot/warm-restore the bundle's fast-restore.sh can be
+ * blocked by a leftover lockfile claiming an owner PID from the previous
+ * VM (which is dead in the new sandbox). The bundle waits ~5s for that
+ * "owner" before giving up — leaving the gateway un-started and the
+ * Slack workflow staring at "Verifying config…" until it hits its
+ * 120s readiness timeout.
+ *
+ * This pre-step inspects the well-known lockfile locations, checks
+ * whether the recorded PID is alive (`kill -0`), and removes any
+ * lockfile owned by a dead PID. Best-effort: never fails the script.
+ *
+ * Exported so the restore-assets layer (and tests) can compose the
+ * fragment into the fast-restore pre-step that runs before the bundle's
+ * own gateway start logic.
+ */
+export function buildClearStaleGatewayLockShell(): string {
+  return [
+    "# Defensively clear stale gateway lockfiles whose owner PID is dead.",
+    "# Workaround for the bundle's fast-restore lock-acquisition stalling on",
+    "# a snapshot-restored lockfile pointing at a PID from the previous VM.",
+    'for _gw_lock in "$HOME/.openclaw/.gateway.lock" "/tmp/openclaw/gateway.pid" "/tmp/openclaw/.gateway.lock"; do',
+    '  if [ -f "$_gw_lock" ]; then',
+    '    _gw_lock_pid="$(tr -cd "0-9" < "$_gw_lock" 2>/dev/null || true)"',
+    '    if [ -n "$_gw_lock_pid" ]; then',
+    '      if kill -0 "$_gw_lock_pid" 2>/dev/null; then',
+    '        echo "{\\"event\\":\\"gateway_lock.alive\\",\\"path\\":\\"$_gw_lock\\",\\"pid\\":$_gw_lock_pid}" >&2',
+    "      else",
+    '        rm -f "$_gw_lock" 2>/dev/null || true',
+    '        echo "{\\"event\\":\\"gateway_lock.cleared_stale\\",\\"path\\":\\"$_gw_lock\\",\\"deadPid\\":$_gw_lock_pid}" >&2',
+    "      fi",
+    "    else",
+    '      rm -f "$_gw_lock" 2>/dev/null || true',
+    '      echo "{\\"event\\":\\"gateway_lock.cleared_unparseable\\",\\"path\\":\\"$_gw_lock\\"}" >&2',
+    "    fi",
+    "  fi",
+    "done",
+    "true",
+  ].join("\n");
+}
+
 /** Shell fragment that kills any existing gateway and starts a fresh one.
  *  Uses the shell variables exported by buildGatewayEnvShell() so the
  *  conditional API-key logic is honoured.
@@ -312,6 +356,7 @@ export function buildGatewayRestartScript(): string {
 set -euo pipefail
 ${buildNetLearnWriteShell()}
 ${buildGatewayEnvShell()}
+${buildClearStaleGatewayLockShell()}
 ${buildGatewayKillShell()}
 ${buildGatewayLaunchShell()}
 `;

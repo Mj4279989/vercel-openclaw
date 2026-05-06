@@ -497,3 +497,68 @@ test("boot-messages: telegram does not short-circuit on port 3000 gateway readin
     }
   });
 });
+
+test("boot-messages: surfaces a real error to the user when the poll loop throws (Patch A)", async () => {
+  await withEnv(TEST_ENV, async () => {
+    const fakeController = new FakeSandboxController();
+    _setSandboxControllerForTesting(fakeController);
+
+    // Sandbox stuck in setup — never transitions to running.
+    await mutateMeta((meta) => {
+      meta.status = "setup";
+      meta.sandboxId = "sbx-stuck";
+      meta.snapshotId = "snap-stuck";
+    });
+
+    const { adapter, log } = createTrackingAdapter();
+
+    const originalFetch = globalThis.fetch;
+    // Gateway probe returns a non-openclaw response so the slack short-
+    // circuit cannot fire. (We use telegram below, which already skips
+    // the probe.) Keep the override defensive.
+    globalThis.fetch = (async () => new Response("nope", { status: 200 })) as typeof fetch;
+
+    try {
+      // Tiny timeout so the deadline check in the loop throws quickly.
+      let thrown: unknown = null;
+      try {
+        await runWithBootMessages({
+          channel: "telegram",
+          adapter,
+          message: createMessage(),
+          origin: "https://app.test",
+          reason: "test",
+          timeoutMs: 100,
+          pollIntervalMs: 30,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      assert.ok(thrown instanceof Error, "loop should have thrown a real Error");
+      assert.match(
+        (thrown as Error).message,
+        /did not become ready/,
+        "thrown error should be the deadline-exceeded message",
+      );
+
+      // The final, synchronous chat.update with a sandbox-failure message
+      // should have been recorded BEFORE the throw propagated.
+      const finalUpdates = log.filter(
+        (e) => e.action === "update" && (e.text ?? "").includes("Sandbox failed to start"),
+      );
+      assert.ok(
+        finalUpdates.length >= 1,
+        `expected a final 'Sandbox failed to start' update, got: ${JSON.stringify(log)}`,
+      );
+      // It should reference the lastStatus we observed (setup).
+      assert.match(
+        finalUpdates[0].text ?? "",
+        /Last status: setup/,
+        "final error message should include the last observed status",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

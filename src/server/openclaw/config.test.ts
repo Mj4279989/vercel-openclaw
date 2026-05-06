@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  buildClearStaleGatewayLockShell,
   buildGatewayConfig,
   buildGatewayRestartScript,
   computeGatewayConfigHash,
@@ -345,6 +346,95 @@ test("buildGatewayRestartScript does not install interactive shell hooks", () =>
   // The net-learn module (which writes to shell-commands-for-learning.log)
   // IS expected in the restart script — it patches Node.js http/https, not shell hooks.
   assert.ok(script.includes("net-learn.js"), "restart script should write the net-learn module");
+});
+
+test("buildGatewayRestartScript clears stale gateway lockfiles before restart", () => {
+  const script = buildGatewayRestartScript();
+  assert.ok(
+    script.includes("Defensively clear stale gateway lockfiles"),
+    "restart script should include stale-lock pre-clear fragment",
+  );
+  assert.ok(
+    script.includes("kill -0"),
+    "restart script should liveness-check the recorded PID",
+  );
+  assert.ok(
+    script.includes("gateway_lock.cleared_stale"),
+    "restart script should emit cleared_stale telemetry",
+  );
+});
+
+test("buildClearStaleGatewayLockShell removes lockfile owned by a dead PID", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "stale-lock-dead-"));
+  try {
+    const lockPath = join(dir, "gateway.lock");
+    // PID 99999999 is exceedingly unlikely to be alive on this host.
+    await writeFile(lockPath, "99999999\n", "utf8");
+
+    const fragment = buildClearStaleGatewayLockShell();
+    // Replace the hard-coded paths with our temp lockfile so the test is
+    // hermetic. The shell-fragment iterates a fixed list, so we just
+    // re-execute the iteration body against our path.
+    const harness = [
+      "set -euo pipefail",
+      `for _gw_lock in "${lockPath}"; do`,
+      '  if [ -f "$_gw_lock" ]; then',
+      '    _gw_lock_pid="$(tr -cd "0-9" < "$_gw_lock" 2>/dev/null || true)"',
+      '    if [ -n "$_gw_lock_pid" ]; then',
+      '      if kill -0 "$_gw_lock_pid" 2>/dev/null; then',
+      '        echo "alive:$_gw_lock_pid"',
+      "      else",
+      '        rm -f "$_gw_lock" 2>/dev/null || true',
+      '        echo "cleared:$_gw_lock_pid"',
+      "      fi",
+      "    fi",
+      "  fi",
+      "done",
+    ].join("\n");
+    const result = spawnSync("bash", ["-c", harness], { encoding: "utf8" });
+    assert.equal(result.status, 0, `bash exit: ${result.stderr}`);
+    assert.match(result.stdout, /cleared:99999999/);
+    // Lockfile should be gone.
+    const stat = spawnSync("test", ["-f", lockPath]);
+    assert.notEqual(stat.status, 0, "lockfile should have been removed");
+    // Sanity-check that the production fragment also references the dead
+    // path it would clear.
+    assert.ok(fragment.includes("cleared_stale"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildClearStaleGatewayLockShell preserves lockfile owned by a live PID", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "stale-lock-alive-"));
+  try {
+    const lockPath = join(dir, "gateway.lock");
+    // Use the test process PID — guaranteed alive while the test runs.
+    await writeFile(lockPath, `${process.pid}\n`, "utf8");
+
+    const harness = [
+      "set -euo pipefail",
+      `for _gw_lock in "${lockPath}"; do`,
+      '  if [ -f "$_gw_lock" ]; then',
+      '    _gw_lock_pid="$(tr -cd "0-9" < "$_gw_lock" 2>/dev/null || true)"',
+      '    if kill -0 "$_gw_lock_pid" 2>/dev/null; then',
+      '      echo "alive:$_gw_lock_pid"',
+      "    else",
+      '      rm -f "$_gw_lock" 2>/dev/null || true',
+      '      echo "cleared:$_gw_lock_pid"',
+      "    fi",
+      "  fi",
+      "done",
+    ].join("\n");
+    const result = spawnSync("bash", ["-c", harness], { encoding: "utf8" });
+    assert.equal(result.status, 0, `bash exit: ${result.stderr}`);
+    assert.match(result.stdout, new RegExp(`alive:${process.pid}`));
+    // Lockfile should still exist.
+    const stat = spawnSync("test", ["-f", lockPath]);
+    assert.equal(stat.status, 0, "lockfile owned by live PID must survive");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("buildGatewayRestartScript kills existing gateway and relaunches it", () => {

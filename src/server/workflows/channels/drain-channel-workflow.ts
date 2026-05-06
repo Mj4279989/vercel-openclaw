@@ -11,6 +11,7 @@ import { deleteMessage, editMessageText } from "@/server/channels/telegram/bot-a
 import { deleteMessage as deleteWhatsAppMessage } from "@/server/channels/whatsapp/whatsapp-api";
 import { recordChannelDlqFailure } from "@/server/channels/dlq";
 import { logError, logInfo, logWarn } from "@/server/log";
+import { recordChannelLastForward } from "@/server/channels/last-forward";
 import { ensureUsableAiGatewayCredential, markSandboxPortUrlStale } from "@/server/sandbox/lifecycle";
 import { getInitializedMeta } from "@/server/store/store";
 import { getStore } from "@/server/store/store";
@@ -1045,53 +1046,30 @@ export async function processChannelStep(
     // /api/admin/why-not-ready, channel UI panels) can report ongoing
     // delivery health, not just the one-shot config-sync result.
     if (isChannelName(channel)) {
-      try {
-        const channelName = channel;
-        const lastAttempt = retryingResult?.attemptsDetail?.[
-          retryingResult.attemptsDetail.length - 1
-        ] ?? null;
-        const finalClassification =
-          retryingResult && retryingResult.attempts >= RETRYING_FORWARD_MAX_ATTEMPTS && !forwardResult.ok
-            ? "exhausted"
-            : lastAttempt?.classification ?? (forwardResult.ok ? "accepted" : "handler-error");
-        const port = portForChannel(channelName);
-        const sandboxUrl = effectiveReadyMeta.portUrls?.[String(port)] ?? null;
-        const lastForward: import("@/shared/channels").ChannelLastForward = {
-          ok: forwardResult.ok,
-          status: forwardResult.status,
-          classification: finalClassification,
-          attempts: retryingResult?.attempts ?? 1,
-          totalMs: retryingResult?.totalMs ?? (forwardCompletedAt - forwardStartedAt),
-          transport: retryingResult?.transport
-            ?? (channelName === "telegram" || channelName === "slack" ? "public" : null),
-          sandboxUrl,
-          sandboxId: effectiveReadyMeta.sandboxId ?? null,
-          finalReasonHead: lastAttempt?.bodyHead ? lastAttempt.bodyHead.slice(0, 200) : null,
-          startedAt: forwardStartedAt,
-          completedAt: forwardCompletedAt,
-          deliveryId: deliveryId ?? null,
-        };
-        await mutateMeta((next) => {
-          if (!next.channelDiagnostics) next.channelDiagnostics = {};
-          next.channelDiagnostics[channelName] = { lastForward };
-        });
-        logInfo("channels.forward_outcome", {
-          channel: channelName,
-          ok: lastForward.ok,
-          classification: lastForward.classification,
-          attempts: lastForward.attempts,
-          totalMs: lastForward.totalMs,
-          sandboxUrl: lastForward.sandboxUrl,
-          sandboxId: lastForward.sandboxId,
-          deliveryId: lastForward.deliveryId,
-        });
-      } catch (err) {
-        logWarn("channels.last_forward_persist_failed", {
-          channel,
-          error: err instanceof Error ? err.message : String(err),
-          deliveryId: deliveryId ?? null,
-        });
-      }
+      const lastAttempt = retryingResult?.attemptsDetail?.[
+        retryingResult.attemptsDetail.length - 1
+      ] ?? null;
+      const finalClassification =
+        retryingResult && retryingResult.attempts >= RETRYING_FORWARD_MAX_ATTEMPTS && !forwardResult.ok
+          ? "exhausted"
+          : lastAttempt?.classification ?? (forwardResult.ok ? "accepted" : "handler-error");
+      const port = portForChannel(channel);
+      const sandboxUrl = effectiveReadyMeta.portUrls?.[String(port)] ?? null;
+      await recordChannelLastForward(channel, {
+        ok: forwardResult.ok,
+        status: forwardResult.status,
+        classification: finalClassification,
+        attempts: retryingResult?.attempts ?? 1,
+        totalMs: retryingResult?.totalMs ?? (forwardCompletedAt - forwardStartedAt),
+        transport: retryingResult?.transport
+          ?? (channel === "telegram" || channel === "slack" ? "public" : null),
+        sandboxUrl,
+        sandboxId: effectiveReadyMeta.sandboxId ?? null,
+        finalReasonHead: lastAttempt?.bodyHead ? lastAttempt.bodyHead.slice(0, 200) : null,
+        startedAt: forwardStartedAt,
+        completedAt: forwardCompletedAt,
+        deliveryId: deliveryId ?? null,
+      });
     }
 
     // Emit one end-to-end Telegram wake summary per request.

@@ -8,6 +8,7 @@ import {
 } from "@/server/channels/dedup";
 import { recordChannelDlqFailure } from "@/server/channels/dlq";
 import { refreshChannelFastPathGatewayToken } from "@/server/channels/fast-path-token";
+import { recordChannelLastForward } from "@/server/channels/last-forward";
 import { getPublicOrigin } from "@/server/public-url";
 import {
   channelDedupKey,
@@ -22,7 +23,7 @@ import {
 } from "@/server/channels/slack/adapter";
 import { extractRequestId, logInfo, logWarn } from "@/server/log";
 import { createOperationContext, withOperationContext } from "@/server/observability/operation-context";
-import { getSandboxDomain, probeGatewayReady, reconcileSandboxHealth, reconcileStaleRunningStatus, syncGatewayConfigToSandbox } from "@/server/sandbox/lifecycle";
+import { getSandboxDomain, markSandboxPortUrlStale, probeGatewayReady, reconcileSandboxHealth, reconcileStaleRunningStatus, syncGatewayConfigToSandbox } from "@/server/sandbox/lifecycle";
 import { getInitializedMeta, getStore } from "@/server/store/store";
 const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 const SLACK_BOOT_MESSAGE_TIMEOUT_MS = 5_000;
@@ -434,8 +435,11 @@ export async function POST(request: Request): Promise<Response> {
       forwardHeaders["x-openclaw-delivery-id"] = `slack:${fastPathDedupId}`;
     }
 
+    const fastPathStartedAt = Date.now();
+    let fastPathSandboxUrl: string | null = null;
     try {
       const sandboxUrl = await getSandboxDomain();
+      fastPathSandboxUrl = sandboxUrl;
       const forwardUrl = `${sandboxUrl}/slack/events`;
 
       await refreshChannelFastPathGatewayToken({
@@ -494,6 +498,20 @@ export async function POST(request: Request): Promise<Response> {
             ackSemantics: "native-handler-accepted",
             ...eventInfo,
           }));
+          await recordChannelLastForward("slack", {
+            ok: true,
+            status: resp.status,
+            classification: "accepted",
+            attempts: 1,
+            totalMs: Date.now() - fastPathStartedAt,
+            transport: "public",
+            sandboxUrl: fastPathSandboxUrl,
+            sandboxId: effectiveMeta.sandboxId ?? null,
+            finalReasonHead: null,
+            startedAt: fastPathStartedAt,
+            completedAt: Date.now(),
+            deliveryId: fastPathDedupId ? `slack:${fastPathDedupId}` : null,
+          });
           return Response.json({ ok: true });
         }
 
@@ -523,6 +541,20 @@ export async function POST(request: Request): Promise<Response> {
                 ackSemantics: "native-handler-accepted-after-route-repair",
                 ...eventInfo,
               }));
+              await recordChannelLastForward("slack", {
+                ok: true,
+                status: retry.status,
+                classification: "accepted",
+                attempts: 2,
+                totalMs: Date.now() - fastPathStartedAt,
+                transport: "public",
+                sandboxUrl: fastPathSandboxUrl,
+                sandboxId: effectiveMeta.sandboxId ?? null,
+                finalReasonHead: null,
+                startedAt: fastPathStartedAt,
+                completedAt: Date.now(),
+                deliveryId: fastPathDedupId ? `slack:${fastPathDedupId}` : null,
+              });
               return Response.json({ ok: true });
             }
             logWarn("channels.slack_fast_path_route_repair_retry_failed", withOperationContext(op, {
@@ -540,6 +572,21 @@ export async function POST(request: Request): Promise<Response> {
         // other non-2xx (handler may already be processing) for log triage.
         const slackFallbackIsGatewayError =
           resp.status === 502 || resp.status === 503 || resp.status === 504;
+
+        // Read response body once to (a) sniff for SANDBOX_NOT_LISTENING and
+        // (b) capture a finalReasonHead for the diagnostics record. Body is
+        // small (Vercel sandbox error pages are <500 bytes); cost is bounded.
+        let respBodyHead: string | null = null;
+        try {
+          respBodyHead = (await resp.text()).slice(0, 200);
+        } catch {
+          /* response body already consumed or unreachable */
+        }
+        const isSandboxNotListening =
+          resp.status === 502 &&
+          respBodyHead != null &&
+          respBodyHead.includes("sandbox is not listening");
+
         logWarn(
           slackFallbackIsGatewayError
             ? "channels.slack_fast_path_gateway_error"
@@ -550,9 +597,55 @@ export async function POST(request: Request): Promise<Response> {
             action: slackFallbackIsGatewayError
               ? "reconcile_and_wake"
               : "start_drain_channel_workflow",
+            classification: isSandboxNotListening
+              ? "sandbox-not-listening"
+              : slackFallbackIsGatewayError
+                ? "proxy-error"
+                : "handler-error",
+            sandboxUrl: fastPathSandboxUrl,
+            bodyHead: respBodyHead,
             ...eventInfo,
           }),
         );
+
+        // Persist the failed forward so /api/channels/summary surfaces it.
+        await recordChannelLastForward("slack", {
+          ok: false,
+          status: resp.status,
+          classification: isSandboxNotListening
+            ? "sandbox-not-listening"
+            : slackFallbackIsGatewayError
+              ? "proxy-error"
+              : "handler-error",
+          attempts: 1,
+          totalMs: Date.now() - fastPathStartedAt,
+          transport: "public",
+          sandboxUrl: fastPathSandboxUrl,
+          sandboxId: effectiveMeta.sandboxId ?? null,
+          finalReasonHead: respBodyHead,
+          startedAt: fastPathStartedAt,
+          completedAt: Date.now(),
+          deliveryId: fastPathDedupId ? `slack:${fastPathDedupId}` : null,
+        });
+
+        // For SANDBOX_NOT_LISTENING, refresh the cached port URL + reconcile
+        // sandbox status now so the workflow fall-through path forwards to a
+        // fresh URL instead of the same dead one.
+        if (isSandboxNotListening) {
+          try {
+            await markSandboxPortUrlStale(
+              effectiveMeta.sandboxId ?? null,
+              undefined,
+              "fast-path-sandbox-not-listening",
+            );
+          } catch (err) {
+            logWarn("channels.slack_fast_path_port_url_refresh_failed", withOperationContext(op, {
+              error: err instanceof Error ? err.message : String(err),
+              sandboxId: effectiveMeta.sandboxId,
+            }));
+          }
+        }
+
         effectiveMeta = await reconcileStaleRunningStatus();
       }
     } catch (error) {

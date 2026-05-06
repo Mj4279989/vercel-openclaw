@@ -1,5 +1,6 @@
 import {
   hasWhatsAppBusinessCredentials,
+  isChannelName,
   type ChannelName,
   type TelegramChannelConfig,
 } from "@/shared/channels";
@@ -10,7 +11,7 @@ import { deleteMessage, editMessageText } from "@/server/channels/telegram/bot-a
 import { deleteMessage as deleteWhatsAppMessage } from "@/server/channels/whatsapp/whatsapp-api";
 import { recordChannelDlqFailure } from "@/server/channels/dlq";
 import { logError, logInfo, logWarn } from "@/server/log";
-import { ensureUsableAiGatewayCredential } from "@/server/sandbox/lifecycle";
+import { ensureUsableAiGatewayCredential, markSandboxPortUrlStale } from "@/server/sandbox/lifecycle";
 import { getInitializedMeta } from "@/server/store/store";
 import { getStore } from "@/server/store/store";
 import { mutateMeta } from "@/server/store/store";
@@ -1039,6 +1040,60 @@ export async function processChannelStep(
       retryingForwardRetries: retryingResult?.retries?.length ?? null,
     });
 
+    // Persist most-recent forward outcome to channel diagnostics so the
+    // operator-facing surfaces (/api/channels/summary readiness,
+    // /api/admin/why-not-ready, channel UI panels) can report ongoing
+    // delivery health, not just the one-shot config-sync result.
+    if (isChannelName(channel)) {
+      try {
+        const channelName = channel;
+        const lastAttempt = retryingResult?.attemptsDetail?.[
+          retryingResult.attemptsDetail.length - 1
+        ] ?? null;
+        const finalClassification =
+          retryingResult && retryingResult.attempts >= RETRYING_FORWARD_MAX_ATTEMPTS && !forwardResult.ok
+            ? "exhausted"
+            : lastAttempt?.classification ?? (forwardResult.ok ? "accepted" : "handler-error");
+        const port = portForChannel(channelName);
+        const sandboxUrl = effectiveReadyMeta.portUrls?.[String(port)] ?? null;
+        const lastForward: import("@/shared/channels").ChannelLastForward = {
+          ok: forwardResult.ok,
+          status: forwardResult.status,
+          classification: finalClassification,
+          attempts: retryingResult?.attempts ?? 1,
+          totalMs: retryingResult?.totalMs ?? (forwardCompletedAt - forwardStartedAt),
+          transport: retryingResult?.transport
+            ?? (channelName === "telegram" || channelName === "slack" ? "public" : null),
+          sandboxUrl,
+          sandboxId: effectiveReadyMeta.sandboxId ?? null,
+          finalReasonHead: lastAttempt?.bodyHead ? lastAttempt.bodyHead.slice(0, 200) : null,
+          startedAt: forwardStartedAt,
+          completedAt: forwardCompletedAt,
+          deliveryId: deliveryId ?? null,
+        };
+        await mutateMeta((next) => {
+          if (!next.channelDiagnostics) next.channelDiagnostics = {};
+          next.channelDiagnostics[channelName] = { lastForward };
+        });
+        logInfo("channels.forward_outcome", {
+          channel: channelName,
+          ok: lastForward.ok,
+          classification: lastForward.classification,
+          attempts: lastForward.attempts,
+          totalMs: lastForward.totalMs,
+          sandboxUrl: lastForward.sandboxUrl,
+          sandboxId: lastForward.sandboxId,
+          deliveryId: lastForward.deliveryId,
+        });
+      } catch (err) {
+        logWarn("channels.last_forward_persist_failed", {
+          channel,
+          error: err instanceof Error ? err.message : String(err),
+          deliveryId: deliveryId ?? null,
+        });
+      }
+    }
+
     // Emit one end-to-end Telegram wake summary per request.
     if (channel === "telegram") {
       const restore = effectiveReadyMeta.lastRestoreMetrics;
@@ -1876,6 +1931,20 @@ const NATIVE_FORWARD_ERROR_BODY_HEAD_CHARS = 2048;
 const RETRYING_FORWARD_MAX_ATTEMPTS = 20;
 const RETRYING_FORWARD_RETRY_INTERVAL_MS = 2_000;
 const RETRYING_FORWARD_TIMEOUT_MS = 45_000;
+// SANDBOX_NOT_LISTENING is not transient — Vercel returns this when the
+// sandbox port is not accepting connections. Retrying the same dead URL
+// won't recover. After 1 attempt + URL cache refresh + 1 retry with the
+// fresh URL, bail and surface the failure.
+const SANDBOX_NOT_LISTENING_MAX_ATTEMPTS = 2;
+
+function portForChannel(channel: ChannelName): number {
+  // Telegram's webhook listener runs on its own port (8787); all other
+  // channels are routed through the gateway's primary port (3000, the
+  // default for getSandboxDomain).
+  const OPENCLAW_GATEWAY_PORT = 3000;
+  const OPENCLAW_TELEGRAM_PORT = 8787;
+  return channel === "telegram" ? OPENCLAW_TELEGRAM_PORT : OPENCLAW_GATEWAY_PORT;
+}
 
 /**
  * Returns true when a non-ok native-handler response is shaped like an
@@ -1993,15 +2062,26 @@ async function forwardToNativeHandlerWithRetry(
       const isHandlerNotReady =
         result.status === 404
         || (result.status === 401 && channel === "telegram");
+      // Vercel sandbox tunnel returns 502 with this body when the sandbox
+      // process isn't listening on the requested port. This is a stale
+      // public-URL signal — the cached sb-XXX.vercel.run points at a port
+      // that has stopped accepting connections. Retrying the same URL is
+      // pointless; we need to refresh the URL and reconcile sandbox state.
+      const isSandboxNotListening =
+        result.status === 502
+        && typeof result.bodyHead === "string"
+        && result.bodyHead.includes("sandbox is not listening");
       const classification = swallowed
         ? "swallowed-by-base-server"
-        : result.status >= 502
-          ? "proxy-error"
-          : isHandlerNotReady
-            ? "handler-not-ready"
-            : result.ok
-              ? "accepted"
-              : "handler-error";
+        : isSandboxNotListening
+          ? "sandbox-not-listening"
+          : result.status >= 502
+            ? "proxy-error"
+            : isHandlerNotReady
+              ? "handler-not-ready"
+              : result.ok
+                ? "accepted"
+                : "handler-error";
       attemptsDetail.push({
         attempt,
         startedAtMs: attemptStartedAt,
@@ -2032,6 +2112,37 @@ async function forwardToNativeHandlerWithRetry(
           retryElapsedMs: Date.now() - startedAt,
           deliveryId,
         });
+
+        // Sandbox public URL is dead. The cached sb-XXX.vercel.run is no
+        // longer accepting connections. Hammering it 20× × 2s = 40s wasted
+        // with no chance of recovery via retry alone. Refresh the URL cache
+        // and reconcile sandbox status, then allow at most one more attempt
+        // with the fresh URL before bailing.
+        if (classification === "sandbox-not-listening") {
+          if (attempt === 1) {
+            try {
+              const port = portForChannel(channel);
+              await markSandboxPortUrlStale(
+                meta.sandboxId ?? null,
+                port,
+                "sandbox-not-listening",
+              );
+            } catch (e) {
+              logWarn("channels.sandbox_port_url_refresh_failed", {
+                channel,
+                attempt,
+                error: e instanceof Error ? e.message : String(e),
+                deliveryId,
+              });
+            }
+          }
+          if (attempt >= SANDBOX_NOT_LISTENING_MAX_ATTEMPTS) {
+            // Bail out of retry loop. Falls through to the "exhausted"
+            // branch below the for-loop, which records the final result.
+            break;
+          }
+        }
+
         if (attempt < RETRYING_FORWARD_MAX_ATTEMPTS && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, RETRYING_FORWARD_RETRY_INTERVAL_MS));
         }

@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import {
   createDefaultChannelConfigs,
   ensureChannelConfigs,
+  isChannelLastForward,
+  CHANNEL_NAMES,
   type ChannelConfigs,
+  type ChannelDiagnostics,
   type ChannelName,
 } from "@/shared/channels";
 
@@ -442,6 +445,13 @@ export type SingleMeta = {
   firewall: FirewallState;
   lastTokenRefreshAt: number | null;
   channels: ChannelConfigs;
+  /**
+   * Most-recent forward attempt + readiness telemetry per channel. Distinct
+   * from `channels` (which holds credentials + one-shot config-sync state) —
+   * this is updated on every inbound webhook so /api/channels/summary and
+   * /api/admin/why-not-ready can report ongoing delivery health.
+   */
+  channelDiagnostics?: ChannelDiagnostics;
   snapshotHistory: SnapshotRecord[];
   lastRestoreMetrics: RestorePhaseMetrics | null;
   /** Capped ring of per-restore timing records (most recent first). */
@@ -518,6 +528,7 @@ export function createDefaultMeta(
     },
     lastTokenRefreshAt: null,
     channels: createDefaultChannelConfigs(),
+    channelDiagnostics: {},
     snapshotHistory: [],
     lastRestoreMetrics: null,
     restoreHistory: [],
@@ -534,6 +545,21 @@ export function createDefaultMeta(
       lastResult: null,
     },
   };
+}
+
+function ensureChannelDiagnostics(value: unknown): ChannelDiagnostics {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const out: ChannelDiagnostics = {};
+  for (const ch of CHANNEL_NAMES) {
+    const entry = raw[ch];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const e = entry as { lastForward?: unknown };
+    if (e.lastForward && isChannelLastForward(e.lastForward)) {
+      out[ch] = { lastForward: e.lastForward };
+    }
+  }
+  return out;
 }
 
 export function ensureMetaShape(
@@ -689,6 +715,9 @@ export function ensureMetaShape(
     lastTokenRefreshAt:
       typeof raw.lastTokenRefreshAt === "number" ? raw.lastTokenRefreshAt : null,
     channels: ensureChannelConfigs(raw.channels),
+    channelDiagnostics: ensureChannelDiagnostics(
+      (raw as Record<string, unknown>).channelDiagnostics,
+    ),
     snapshotHistory: Array.isArray((raw as Record<string, unknown>).snapshotHistory)
       ? ((raw as Record<string, unknown>).snapshotHistory as unknown[]).filter(isSnapshotRecord)
       : [],

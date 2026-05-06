@@ -269,6 +269,47 @@ test("PUT handler attaches skipped live-config-sync header and body when sandbox
   });
 });
 
+test("PUT handler persists Slack live config sync state for summary readiness", async () => {
+  await withHarness(async (h) => {
+    _setAiGatewayTokenOverrideForTesting("oidc-token");
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com";
+
+    const { PUT } = createChannelAdminRouteHandlers({
+      channel: "slack",
+      selectState: (s) => s.slack,
+      async put() {
+        await h.mutateMeta((meta) => {
+          meta.channels.slack = {
+            signingSecret: "test-signing-secret",
+            botToken: "xoxb-test",
+            configuredAt: Date.now(),
+          };
+        });
+      },
+      async delete() {},
+    });
+
+    const request = buildAuthPutRequest(
+      "/api/channels/slack",
+      JSON.stringify({}),
+      {
+        host: "app.example.com",
+        "x-forwarded-host": "app.example.com",
+        "x-forwarded-proto": "https",
+      },
+    );
+
+    const result = await callRoute(PUT, request);
+
+    assert.equal(result.status, 200);
+    const meta = await h.getMeta();
+    assert.equal(meta.channels.slack?.liveConfigSync?.outcome, "skipped");
+    assert.equal(meta.channels.slack?.liveConfigSync?.reason, "sandbox_not_running");
+    assert.equal(meta.channels.slack?.liveConfigSync?.liveConfigFresh, false);
+    assert.equal(typeof meta.channels.slack?.liveConfigSync?.checkedAt, "number");
+  });
+});
+
 test("DELETE handler attaches skipped live-config-sync header and body when sandbox not running", async () => {
   await withHarness(async () => {
     _setAiGatewayTokenOverrideForTesting("oidc-token");

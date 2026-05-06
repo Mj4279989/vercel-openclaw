@@ -2,6 +2,7 @@ import type { WhatsAppLinkState } from "@/shared/channels";
 import {
   type ChannelSummaryEntry,
   type ChannelSummaryResponse,
+  type SlackSummaryEntry,
   type WhatsAppSummaryEntry,
   WHATSAPP_CONNECTION_SEMANTICS,
   WHATSAPP_SUMMARY_DETAIL_ROUTE,
@@ -19,6 +20,43 @@ function buildSummaryEntry(
     connected: configured,
     configured,
     lastError,
+  };
+}
+
+function buildSlackSummaryEntry(
+  config:
+    | {
+        lastError?: string;
+        liveConfigSync?: {
+          outcome: "skipped" | "applied" | "degraded" | "failed";
+          reason: string;
+          liveConfigFresh: boolean;
+          checkedAt: number;
+          operatorMessage?: string | null;
+        };
+      }
+    | null
+    | undefined,
+): SlackSummaryEntry {
+  const configured = config !== null && config !== undefined;
+  const liveConfigSync = config?.liveConfigSync ?? null;
+  const liveConfigFresh = liveConfigSync?.liveConfigFresh === true;
+  const deliveryReady = configured && liveConfigFresh;
+
+  return {
+    connected: configured,
+    configured,
+    lastError: config?.lastError ?? null,
+    deliveryReady,
+    routeReady: deliveryReady,
+    liveConfigFresh,
+    readiness: {
+      configSyncOutcome: liveConfigSync?.outcome ?? null,
+      reason: liveConfigSync?.reason ?? (configured ? "slack_delivery_not_verified" : null),
+      checkedAt: liveConfigSync?.checkedAt ?? null,
+      operatorMessage: liveConfigSync?.operatorMessage ?? null,
+      sandboxPath: "/slack/events",
+    },
   };
 }
 
@@ -76,10 +114,7 @@ export async function GET(request: Request): Promise<Response> {
     const meta = await getInitializedMeta();
 
     const body: ChannelSummaryResponse = {
-      slack: buildSummaryEntry(
-        meta.channels.slack !== null,
-        meta.channels.slack?.lastError ?? null,
-      ),
+      slack: buildSlackSummaryEntry(meta.channels.slack),
       telegram: buildSummaryEntry(
         meta.channels.telegram !== null,
         meta.channels.telegram?.lastError ?? null,

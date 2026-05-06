@@ -13,6 +13,23 @@ export type ChannelSummaryEntry = {
   lastError: string | null;
 };
 
+export type SlackSummaryEntry = ChannelSummaryEntry & {
+  /**
+   * True only when credentials are saved and the running sandbox has accepted
+   * the latest Slack config sync, including route registration for /slack/events.
+   */
+  deliveryReady: boolean;
+  routeReady: boolean;
+  liveConfigFresh: boolean;
+  readiness: {
+    configSyncOutcome: "skipped" | "applied" | "degraded" | "failed" | null;
+    reason: string | null;
+    checkedAt: number | null;
+    operatorMessage: string | null;
+    sandboxPath: "/slack/events";
+  };
+};
+
 export type WhatsAppSummaryEntry = ChannelSummaryEntry & {
   /**
    * Raw gateway-side link/session state. Distinct from the coarse
@@ -27,7 +44,7 @@ export type WhatsAppSummaryEntry = ChannelSummaryEntry & {
 };
 
 export type ChannelSummaryResponse = {
-  slack: ChannelSummaryEntry;
+  slack: SlackSummaryEntry;
   telegram: ChannelSummaryEntry;
   discord: ChannelSummaryEntry;
   whatsapp: WhatsAppSummaryEntry;

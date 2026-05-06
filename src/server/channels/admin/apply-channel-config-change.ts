@@ -10,6 +10,7 @@
 import type { ChannelName } from "@/shared/channels";
 import type { LiveConfigSyncResult } from "@/shared/live-config-sync";
 import { logInfo, logWarn } from "@/server/log";
+import { mutateMeta } from "@/server/store/store";
 import {
   markRestoreTargetDirty,
   syncGatewayConfigToSandbox,
@@ -50,6 +51,20 @@ export async function applyChannelConfigChange(params: {
       operatorMessage:
         "Config sync failed. The sandbox may be serving stale configuration.",
     };
+  }
+
+  if (channel === "slack") {
+    await mutateMeta((meta) => {
+      if (meta.channels.slack) {
+        meta.channels.slack.liveConfigSync = {
+          outcome: liveConfigSync.outcome,
+          reason: liveConfigSync.reason,
+          liveConfigFresh: liveConfigSync.liveConfigFresh,
+          operatorMessage: liveConfigSync.operatorMessage,
+          checkedAt: Date.now(),
+        };
+      }
+    });
   }
 
   // Single canonical log event for all channel config mutations.

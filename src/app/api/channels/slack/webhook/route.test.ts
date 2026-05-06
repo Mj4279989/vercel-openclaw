@@ -376,6 +376,70 @@ test("Slack webhook: fast path non-ok response falls through to workflow wake pa
   });
 });
 
+test("Slack webhook: fast path 404 repairs config sync and retries native handler", async () => {
+  await withHarness(async (h) => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com";
+    await configureSlack(h);
+    _resetLogBuffer();
+    await h.mutateMeta((meta) => {
+      meta.status = "running";
+      meta.sandboxId = "sbx-slack-route-repair";
+      meta.snapshotId = "snap-slack-route-repair";
+      meta.portUrls = {
+        "3000": "https://sbx-slack-route-repair-3000.fake.vercel.run",
+      };
+    });
+    const handle = await h.controller.get({ sandboxId: "sbx-slack-route-repair" });
+    let slackRouteProbeCount = 0;
+    handle.responders.push((cmd, args) => {
+      if (cmd !== "bash" || args?.[0] !== "-c") {
+        return undefined;
+      }
+      const script = args[1] ?? "";
+      if (script.includes("http://localhost:3000/") && script.includes("openclaw-app")) {
+        return { exitCode: 0, output: async () => "ok" };
+      }
+      if (script.includes("/slack/events")) {
+        slackRouteProbeCount += 1;
+        return { exitCode: 0, output: async () => "401" };
+      }
+      return undefined;
+    });
+
+    h.fakeFetch.onGet("https://sbx-slack-route-repair-3000.fake.vercel.run", () => gatewayReadyResponse());
+    let forwardCount = 0;
+    h.fakeFetch.onPost(/slack\/events$/, () => {
+      forwardCount += 1;
+      return forwardCount === 1
+        ? new Response("missing route", { status: 404 })
+        : new Response("ok", { status: 200 });
+    });
+
+    const route = getSlackWebhookRoute();
+    const startMock = mock.method(slackWebhookWorkflowRuntime, "start", async () => {});
+
+    try {
+      const req = buildSlackWebhook({ signingSecret: SLACK_SIGNING_SECRET });
+      const result = await callRoute(route.POST, req);
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.json, { ok: true });
+      assert.equal(forwardCount, 2, "404 should be retried after config sync repair");
+      assert.equal(slackRouteProbeCount, 1, "repair should prove /slack/events is mounted");
+      assert.equal(startMock.mock.callCount(), 0, "successful repair must not start workflow fallback");
+      assert.ok(
+        handle.commands.some((c) => c.cmd === "bash" && c.args?.[0]?.includes("restart-gateway")),
+        "repair should restart the gateway before retrying Slack delivery",
+      );
+      const logs = getServerLogs().map((entry) => entry.message);
+      assert.ok(logs.includes("channels.slack_fast_path_route_missing_repair"));
+      assert.ok(logs.includes("channels.slack_fast_path_ok"));
+      resetAfterCallbacks();
+    } finally {
+      startMock.mock.restore();
+    }
+  });
+});
+
 test("Slack webhook: fast path refreshes AI Gateway token before native forward", async () => {
   await withHarness(async (h) => {
     await configureSlack(h);

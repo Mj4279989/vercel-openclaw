@@ -130,6 +130,75 @@ test("GET /api/channels/summary: reflects connected channel state", async () => 
   });
 });
 
+test("GET /api/channels/summary: Slack credentials are not delivery-ready until live config sync is fresh", async () => {
+  await withTestEnv(async () => {
+    await mutateMeta((meta) => {
+      meta.channels.slack = {
+        signingSecret: "test-signing-secret",
+        botToken: "xoxb-test",
+        configuredAt: Date.now(),
+        liveConfigSync: {
+          outcome: "failed",
+          reason: "Slack route did not become ready after config sync restart",
+          liveConfigFresh: false,
+          operatorMessage: "Config sync failed. The sandbox may be serving stale configuration.",
+          checkedAt: 123456,
+        },
+      };
+    });
+
+    const route = getChannelsSummaryRoute();
+    const request = buildAuthGetRequest("/api/channels/summary");
+    const result = await callRoute(route.GET!, request);
+
+    assert.equal(result.status, 200);
+    const body = result.json as ChannelSummaryResponse;
+
+    assert.equal(body.slack.connected, true, "legacy connected still means credentials exist");
+    assert.equal(body.slack.configured, true);
+    assert.equal(body.slack.deliveryReady, false);
+    assert.equal(body.slack.routeReady, false);
+    assert.equal(body.slack.liveConfigFresh, false);
+    assert.equal(body.slack.readiness.configSyncOutcome, "failed");
+    assert.equal(body.slack.readiness.reason, "Slack route did not become ready after config sync restart");
+    assert.equal(body.slack.readiness.checkedAt, 123456);
+    assert.equal(body.slack.readiness.sandboxPath, "/slack/events");
+  });
+});
+
+test("GET /api/channels/summary: Slack deliveryReady follows successful live config sync", async () => {
+  await withTestEnv(async () => {
+    await mutateMeta((meta) => {
+      meta.channels.slack = {
+        signingSecret: "test-signing-secret",
+        botToken: "xoxb-test",
+        configuredAt: Date.now(),
+        liveConfigSync: {
+          outcome: "applied",
+          reason: "config_written_and_restarted",
+          liveConfigFresh: true,
+          operatorMessage: null,
+          checkedAt: 123789,
+        },
+      };
+    });
+
+    const route = getChannelsSummaryRoute();
+    const request = buildAuthGetRequest("/api/channels/summary");
+    const result = await callRoute(route.GET!, request);
+
+    assert.equal(result.status, 200);
+    const body = result.json as ChannelSummaryResponse;
+
+    assert.equal(body.slack.connected, true);
+    assert.equal(body.slack.configured, true);
+    assert.equal(body.slack.deliveryReady, true);
+    assert.equal(body.slack.routeReady, true);
+    assert.equal(body.slack.liveConfigFresh, true);
+    assert.equal(body.slack.readiness.configSyncOutcome, "applied");
+  });
+});
+
 test("GET /api/channels/summary: whatsapp connected reflects enabled config", async () => {
   await withTestEnv(async () => {
     await mutateMeta((meta) => {

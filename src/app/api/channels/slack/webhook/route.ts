@@ -22,7 +22,7 @@ import {
 } from "@/server/channels/slack/adapter";
 import { extractRequestId, logInfo, logWarn } from "@/server/log";
 import { createOperationContext, withOperationContext } from "@/server/observability/operation-context";
-import { getSandboxDomain, probeGatewayReady, reconcileSandboxHealth, reconcileStaleRunningStatus } from "@/server/sandbox/lifecycle";
+import { getSandboxDomain, probeGatewayReady, reconcileSandboxHealth, reconcileStaleRunningStatus, syncGatewayConfigToSandbox } from "@/server/sandbox/lifecycle";
 import { getInitializedMeta, getStore } from "@/server/store/store";
 const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 const SLACK_BOOT_MESSAGE_TIMEOUT_MS = 5_000;
@@ -495,6 +495,43 @@ export async function POST(request: Request): Promise<Response> {
             ...eventInfo,
           }));
           return Response.json({ ok: true });
+        }
+
+        if (resp.status === 404) {
+          const sync = await syncGatewayConfigToSandbox();
+          logWarn("channels.slack_fast_path_route_missing_repair", withOperationContext(op, {
+            status: resp.status,
+            sandboxId: effectiveMeta.sandboxId,
+            syncOutcome: sync.outcome,
+            syncReason: sync.reason,
+            liveConfigFresh: sync.liveConfigFresh,
+            action: sync.liveConfigFresh ? "retry_native_handler" : "start_drain_channel_workflow",
+            ...eventInfo,
+          }));
+
+          if (sync.liveConfigFresh) {
+            const retry = await fetch(forwardUrl, {
+              method: "POST",
+              headers: forwardHeaders,
+              body: rawBody,
+              signal: AbortSignal.timeout(SLACK_FAST_PATH_FORWARD_TIMEOUT_MS),
+            });
+            if (retry.ok) {
+              logInfo("channels.slack_fast_path_ok", withOperationContext(op, {
+                sandboxId: effectiveMeta.sandboxId,
+                responseStatus: retry.status,
+                ackSemantics: "native-handler-accepted-after-route-repair",
+                ...eventInfo,
+              }));
+              return Response.json({ ok: true });
+            }
+            logWarn("channels.slack_fast_path_route_repair_retry_failed", withOperationContext(op, {
+              status: retry.status,
+              sandboxId: effectiveMeta.sandboxId,
+              action: "start_drain_channel_workflow",
+              ...eventInfo,
+            }));
+          }
         }
 
         // Native handler returned non-2xx — fall through to workflow wake path

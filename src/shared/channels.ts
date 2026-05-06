@@ -8,6 +8,14 @@ export function isChannelName(value: string): value is ChannelName {
 
 export type ChannelMode = "webhook-proxied" | "gateway-native";
 
+export type SlackLiveConfigSyncState = {
+  outcome: "skipped" | "applied" | "degraded" | "failed";
+  reason: string;
+  liveConfigFresh: boolean;
+  checkedAt: number;
+  operatorMessage?: string | null;
+};
+
 export type SlackChannelConfig = {
   signingSecret: string;
   botToken: string;
@@ -16,6 +24,7 @@ export type SlackChannelConfig = {
   user?: string;
   botId?: string;
   lastError?: string;
+  liveConfigSync?: SlackLiveConfigSyncState;
 };
 
 export type TelegramChannelConfig = {

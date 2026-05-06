@@ -77,6 +77,64 @@ These are the things Claude will otherwise get wrong:
 
 When a channel (Slack/Telegram/Discord/WhatsApp) is "stuck" — message sent, bot doesn't reply — start here. **Always read the structured surfaces before guessing**: vague error strings have repeatedly masked different bugs.
 
+### Discipline first, code second
+
+This system has layered failures (OAuth, sandbox lifecycle, gateway routes, plugin loading, cached URLs, fast path vs workflow). When debugging it, follow this discipline — past sessions burned hours when we let momentum override evidence.
+
+**Before touching code, produce four artifacts:**
+
+1. **Runtime path diagram.** The full delivery pipeline for the channel in question:
+   ```
+   Slack UI message → webhook route → fast path? → workflow fallback?
+     → sandbox public URL → gateway → plugin route registered? → native handler
+     → bot reply → readiness/summary updated
+   ```
+   Mark every edge as `unknown / verified-good / verified-bad`. Do not propose a fix until at least one edge is `verified-bad`.
+
+2. **Hypothesis table.** Maintain it for the whole session. No silent pivots.
+   ```
+   Hypothesis | Evidence for | Evidence against | Fastest falsifier | Status
+   ```
+   Update `Status` to `ruled-out` when a falsifier comes back negative — keep the row visible. New theories don't replace old ones; they queue.
+
+3. **Definition of done.** Write this before opening any code. Example:
+   ```
+   1. App connected.        2. Real Slack-UI msg reaches the bot.
+   3. Bot replies in DM.    4. summary.lastForward.ok:true classification:accepted.
+   5. deliveryReady && routeReady true.   6. why-not-ready has no blocker.
+   7. Tests pass.           8. Committed + pushed.   9. CLAUDE.md updated if new failure mode found.
+   ```
+
+4. **Deployment-state proof.** Before reasoning about runtime behavior, prove the deployed code matches the source you're reading:
+   ```bash
+   git rev-parse HEAD                       # local
+   git ls-remote origin main                # what main has
+   curl $URL/api/admin/sandbox-diag         # what's deployed (or any build-info endpoint)
+   ```
+   If they don't line up, fix that first. No proof, no debugging.
+
+**Stop-the-line rules.** Stop and reassess if any of these fire:
+
+- The same error string appears after a "fix" — classification is too vague, not necessarily that the fix failed. **If two failure modes produce the same operator-facing message, add classification before fixing.** This is what bit us with `"Slack route did not become ready after config sync restart"` masking three distinct bugs.
+- You're about to write "most likely" for the second time in a row — gather direct evidence instead.
+- A route has multiple terminal paths and only one is instrumented — enumerate all of them. For any webhook change, the checklist is: fast-path success, fast-path non-2xx, fast-path fetch exception, fast-path skipped, workflow success, workflow exhausted, dedup skip, invalid signature, no credentials. Each terminal path **must** log; each delivery path **must** update `lastForward`; each skip path **must** explain why.
+- Words `connected` / `oauth-complete` / `delivery-ready` are being used interchangeably — split them. Distinct states: `oauthComplete`, `credentialsSaved`, `authTestPassed`, `configSyncApplied`, `handlerRegistered`, `lastForwardAccepted`, `deliveryReady`. One vague label hides bugs.
+- Browser automation can't see the DOM — **reload the tab and verify exact tab URL/IDs first** before guessing selectors. Cross-check server-side `lastForward` rather than trusting only the UI read. The `slack-ui` skill encodes this; use it.
+- A code change is staged without a verification step — write the repro/verify command first.
+
+**On finding "the real bug."** When you think you've found it, ask:
+- What evidence rules out the previous hypothesis?
+- What runtime signal proves *this* one (not just correlates)?
+- Which paths haven't been checked?
+- Could this be a *second* bug rather than *the* bug? (Layered failures are common here.)
+
+**Commit shape.** Prefer many small commits over one sprawling one. Each commit:
+- names the exact failure it addresses,
+- includes a verification step (test or manual),
+- shows a before/after signal.
+
+This makes rollback and review sane and forces honest scoping.
+
 ### Where to look, in order
 
 1. **`GET /api/admin/why-not-ready`** — aggregator. Returns typed `blockers` per channel with `kind`, `evidence`, `suggestedAction`. Single round-trip to "why is this channel red right now?". Implementation: `src/server/admin/why-not-ready.ts` → `buildWhyNotReady()`.

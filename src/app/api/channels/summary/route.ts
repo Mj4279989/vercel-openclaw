@@ -49,28 +49,45 @@ function buildSlackSummaryEntry(
   const liveConfigFresh = liveConfigSync?.liveConfigFresh === true;
   const lastForwardSummary = projectChannelLastForward(lastForward, now);
 
-  // Delivery readiness now considers ongoing forward health, not just the
-  // one-shot config-sync outcome. A successful config-sync followed by a
-  // sandbox-not-listening forward is NOT ready — the public URL has gone
-  // stale since the config was applied.
+  // Delivery readiness considers BOTH the one-shot config-sync result AND
+  // ongoing forward health. Truth-table priorities:
+  //   - Recently-accepted forward → ready (regardless of stale config-sync
+  //     state — a forward succeeding is stronger evidence than the last
+  //     config-sync result, which may be hours old).
+  //   - Recently-broken forward → not ready, with a specific live reason.
+  //   - No forward yet → fall back to config-sync state.
   const lastForwardSignalsBroken =
     lastForwardSummary !== null &&
     lastForwardSummary.ok === false &&
     (lastForwardSummary.classification === "sandbox-not-listening" ||
       lastForwardSummary.classification === "handler-not-ready" ||
       lastForwardSummary.classification === "exhausted");
+  // Five minutes of "recent" before we stop trusting a green signal — long
+  // enough that conversational chat delivers ready=true continuously, short
+  // enough that a freshly-suspended sandbox surfaces as not-ready quickly.
+  const RECENT_FORWARD_WINDOW_MS = 5 * 60 * 1000;
+  const recentlyAcceptedForward =
+    lastForwardSummary !== null &&
+    lastForwardSummary.ok === true &&
+    lastForwardSummary.classification === "accepted" &&
+    lastForwardSummary.ageMs < RECENT_FORWARD_WINDOW_MS;
 
-  const deliveryReady = configured && liveConfigFresh && !lastForwardSignalsBroken;
+  const deliveryReady =
+    configured &&
+    !lastForwardSignalsBroken &&
+    (recentlyAcceptedForward || liveConfigFresh);
 
   // Reason precedence:
-  //   1. If the most recent forward broke, surface its classification — the
-  //      operator wants to see the live failure mode, not the stale
-  //      config-sync result.
-  //   2. Otherwise fall back to liveConfigSync's reason, then to a generic
-  //      "not yet verified" sentinel when configured but never forwarded.
+  //   1. Live failure mode (broken forward) — operator wants the real cause.
+  //   2. Recently-accepted forward — operator sees the green signal even if
+  //      the historical config-sync record was failed.
+  //   3. Fall back to liveConfigSync's reason.
+  //   4. Generic "not yet verified" sentinel when configured but never seen.
   let reason: string | null;
   if (lastForwardSignalsBroken && lastForwardSummary) {
     reason = `last_forward_${lastForwardSummary.classification}`;
+  } else if (recentlyAcceptedForward) {
+    reason = null;
   } else if (liveConfigSync?.reason) {
     reason = liveConfigSync.reason;
   } else {

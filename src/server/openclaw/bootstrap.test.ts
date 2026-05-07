@@ -276,6 +276,12 @@ test("setupOpenClaw preserves bundle package root identity after shim package ex
         "shim package should extract at the bundle package root",
       );
       assert.ok(
+        script.includes(
+          "cp /home/vercel-sandbox/node_modules/openclaw/dist/plugins/runtime/index.js /home/vercel-sandbox/dist/plugins/runtime/index.js",
+        ),
+        "shim package extraction should stage the plugin runtime at the bundle package root",
+      );
+      assert.ok(
         script.includes(`echo '{"name":"openclaw","private":true,"version":"0.0.0","type":"module"}' > /home/vercel-sandbox/package.json`),
         "shim package extraction must not leave the package root named as the sandbox runtime helper",
       );

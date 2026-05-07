@@ -365,6 +365,7 @@ export async function setupOpenClaw(
         [
           "set -e",
           `curl -fsSL --max-time 30 --connect-timeout 10 ${JSON.stringify(openclawPkgUrl)} | tar xz -C /home/vercel-sandbox`,
+          `if [ -f /home/vercel-sandbox/node_modules/openclaw/dist/plugins/runtime/index.js ]; then mkdir -p /home/vercel-sandbox/dist/plugins/runtime && cp /home/vercel-sandbox/node_modules/openclaw/dist/plugins/runtime/index.js /home/vercel-sandbox/dist/plugins/runtime/index.js && echo '{"event":"bundle.plugin_runtime_root_staged","source":"node_modules/openclaw/dist/plugins/runtime/index.js","target":"dist/plugins/runtime/index.js"}'; else echo '{"event":"bundle.plugin_runtime_root_missing","source":"node_modules/openclaw/dist/plugins/runtime/index.js"}'; fi`,
           `echo '{"name":"openclaw","private":true,"version":"0.0.0","type":"module"}' > /home/vercel-sandbox/package.json`,
         ].join(" && "),
       ],
@@ -372,9 +373,11 @@ export async function setupOpenClaw(
       stderr: progress?.makeWritable("stderr"),
     });
     if (openclawPkgResult.exitCode === 0) {
+      const stdout = (await openclawPkgResult.output("stdout")).trim();
       logInfo("openclaw.setup.bundle_openclaw_pkg_downloaded", {
         sandboxId: sandbox.sandboxId,
         openclawPkgUrl,
+        stdoutHead: stdout.slice(0, 500),
       });
     } else {
       const stderr = (await openclawPkgResult.output("stderr")).trim();

@@ -344,11 +344,11 @@ test("setupOpenClaw creates bundle compatibility shims after shared chunks extra
         "shared chunks setup should create pi model discovery compatibility shim",
       );
       assert.ok(
-        script.includes("discoverModels as i"),
+        script.includes("discoverModels"),
         "pi model discovery shim should select the chunk by export signature",
       );
       assert.ok(
-        script.includes("i as discoverModels") && script.includes("n as ModelRegistry") && script.includes("t as AuthStorage"),
+        script.includes("export const discoverModels") && script.includes("export const ModelRegistry") && script.includes("export const AuthStorage"),
         "pi model discovery shim should expose the non-minified discovery export name",
       );
       assert.ok(

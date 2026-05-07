@@ -1488,11 +1488,11 @@ test("buildFastRestoreScript recreates bundle compatibility shims before gateway
     "expected pi model discovery compatibility shim",
   );
   assert.ok(
-    script.includes("discoverModels as i"),
+    script.includes("discoverModels"),
     "expected pi model discovery chunk detection",
   );
   assert.ok(
-    script.includes("i as discoverModels") && script.includes("n as ModelRegistry") && script.includes("t as AuthStorage"),
+    script.includes("export const discoverModels") && script.includes("export const ModelRegistry") && script.includes("export const AuthStorage"),
     "expected pi model discovery shim to expose non-minified export name",
   );
   assert.ok(

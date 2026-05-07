@@ -4,6 +4,10 @@ import test from "node:test";
 import {
   runWithBootMessages,
 } from "@/server/channels/core/boot-messages";
+import {
+  beginSetupProgress,
+  SetupProgressWriter,
+} from "@/server/sandbox/setup-progress";
 import type {
   ExtractedChannelMessage,
   PlatformAdapter,
@@ -425,8 +429,77 @@ test("boot-messages: updates message on status transition", async () => {
       // Check that we see restore-oriented status transitions
       const updateTexts = updates.map((e) => e.text).join("|");
       assert.ok(
-        updateTexts.includes("Restoring") || updateTexts.includes("Starting"),
+        updateTexts.includes("Resuming") || updateTexts.includes("Verifying"),
         `should have status transitions in: ${updateTexts}`,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("boot-messages: setup progress phases update while meta status stays setup", async () => {
+  await withEnv(TEST_ENV, async () => {
+    const fakeController = new FakeSandboxController();
+    _setSandboxControllerForTesting(fakeController);
+
+    await mutateMeta((meta) => {
+      meta.status = "setup";
+      meta.sandboxId = "sbx-setup-progress";
+      meta.snapshotId = "snap-setup-progress";
+    });
+
+    const progress = await beginSetupProgress({
+      attemptId: "attempt-setup-progress",
+      phase: "writing-config",
+    });
+    const writer = new SetupProgressWriter(progress);
+
+    const { adapter, log } = createTrackingAdapter();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("not-ready", { status: 200 })) as typeof fetch;
+
+    try {
+      const resultPromise = runWithBootMessages({
+        channel: "slack",
+        adapter,
+        message: createMessage(),
+        origin: "https://app.test",
+        reason: "test",
+        timeoutMs: 10_000,
+        pollIntervalMs: 50,
+      });
+
+      await new Promise((r) => setTimeout(r, 100));
+      writer.setPhase("starting-gateway");
+      await new Promise((r) => setTimeout(r, 400));
+
+      writer.setPhase("waiting-for-gateway");
+      await new Promise((r) => setTimeout(r, 400));
+
+      await new Promise((r) => setTimeout(r, 100));
+      await mutateMeta((meta) => {
+        meta.status = "running";
+      });
+
+      const result = await resultPromise;
+
+      assert.equal(result.bootMessageSent, true);
+      const updateTexts = log
+        .filter((e) => e.action === "update")
+        .map((e) => e.text);
+      assert.ok(
+        updateTexts.includes("🦞 Syncing channel config\u2026"),
+        `expected config phase update in ${JSON.stringify(updateTexts)}`,
+      );
+      assert.ok(
+        updateTexts.includes("🦞 Starting OpenClaw gateway\u2026"),
+        `expected gateway start phase update in ${JSON.stringify(updateTexts)}`,
+      );
+      assert.ok(
+        updateTexts.includes("🦞 Waiting for gateway\u2026"),
+        `expected gateway wait phase update in ${JSON.stringify(updateTexts)}`,
       );
     } finally {
       globalThis.fetch = originalFetch;

@@ -1,6 +1,6 @@
 ---
 name: channel-forward-parity
-description: Webhook route parity audit for channel delivery changes: ensure terminal paths log, record lastForward, classify failures, and refresh stale sandbox port URLs.
+description: "Webhook route parity audit for channel delivery changes: ensure terminal paths log, record lastForward, classify failures, and refresh stale sandbox port URLs."
 ---
 
 # Channel Forward Parity

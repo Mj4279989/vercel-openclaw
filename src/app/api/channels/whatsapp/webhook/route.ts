@@ -49,6 +49,20 @@ function workflowStartFailedResponse() {
   );
 }
 
+function collectForwardHeaders(
+  request: Request,
+  names: readonly string[],
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const name of names) {
+    const value = request.headers.get(name);
+    if (value) {
+      headers[name] = value;
+    }
+  }
+  return headers;
+}
+
 async function releaseWhatsAppWebhookDedupLockForRetry(
   lock: WhatsAppWebhookDedupLock | null,
 ): Promise<WhatsAppWebhookDedupReleaseResult> {
@@ -134,9 +148,26 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: true });
   }
 
+  const whatsappForwardHeaders = collectForwardHeaders(
+    request,
+    WHATSAPP_FORWARD_HEADERS,
+  );
+
   let dedupLock: WhatsAppWebhookDedupLock | null = null;
   try {
     const messageId = extractWhatsAppMessageId(payload);
+    if (!messageId) {
+      const adapter = createWhatsAppAdapter(config);
+      const extracted = await adapter.extractMessage(payload);
+      if (extracted.kind !== "message") {
+        logInfo("channels.whatsapp_webhook_non_message_skip", {
+          requestId,
+          reason: extracted.reason,
+          bodyLength: rawBody.length,
+        });
+        return Response.json({ ok: true });
+      }
+    }
     if (messageId) {
       const dedupKey = channelDedupKey("whatsapp", messageId);
       const dedupResult = await tryAcquireChannelDedupLock({
@@ -147,6 +178,11 @@ export async function POST(request: Request): Promise<Response> {
         dedupId: messageId,
       });
       if (dedupResult.kind === "duplicate") {
+        logInfo("channels.whatsapp_webhook_dedup_skip", {
+          requestId,
+          messageId,
+          dedupKey,
+        });
         return Response.json({ ok: true });
       }
       if (dedupResult.kind === "acquired") {
@@ -184,13 +220,9 @@ export async function POST(request: Request): Promise<Response> {
     // workflow wake path.
     let effectiveMeta = meta;
     if (effectiveMeta.status === "running" && effectiveMeta.sandboxId) {
-      const forwardHeaders: Record<string, string> = {};
-      for (const headerName of WHATSAPP_FORWARD_HEADERS) {
-        const headerValue = request.headers.get(headerName);
-        if (headerValue) {
-          forwardHeaders[headerName] = headerValue;
-        }
-      }
+      const forwardHeaders: Record<string, string> = {
+        ...whatsappForwardHeaders,
+      };
       const messageIdForForward = extractWhatsAppMessageId(payload);
       const fastPathDeliveryId = messageIdForForward
         ? `whatsapp:${messageIdForForward}`
@@ -260,14 +292,19 @@ export async function POST(request: Request): Promise<Response> {
               ? "handler-not-ready"
               : "handler-error";
 
-        if (forwardResponse.status === 502 || forwardResponse.status === 503 || forwardResponse.status === 504) {
+        const shouldWakeWorkflow =
+          classification === "sandbox-not-listening" ||
+          classification === "proxy-error" ||
+          classification === "handler-not-ready";
+
+        if (shouldWakeWorkflow) {
           logWarn("channels.whatsapp_fast_path_gateway_error", withOperationContext(op, {
             sandboxId: effectiveMeta.sandboxId,
             status: forwardResponse.status,
             classification,
             sandboxUrl: fastPathSandboxUrl,
             bodyHead: respBodyHead,
-            action: "reconcile_and_wake",
+            action: "start_drain_channel_workflow",
           }));
           await recordChannelLastForward("whatsapp", {
             ok: false,
@@ -298,7 +335,9 @@ export async function POST(request: Request): Promise<Response> {
               }));
             }
           }
-          effectiveMeta = await reconcileStaleRunningStatus();
+          if (classification === "sandbox-not-listening" || classification === "proxy-error") {
+            effectiveMeta = await reconcileStaleRunningStatus();
+          }
         } else {
           logWarn("channels.whatsapp_fast_path_non_ok", withOperationContext(op, {
             sandboxId: effectiveMeta.sandboxId,
@@ -420,9 +459,15 @@ export async function POST(request: Request): Promise<Response> {
           requestId: requestId ?? null,
           bootMessageId,
           receivedAtMs,
+          workflowHandoff: {
+            whatsappForwardHeaders,
+            whatsappRawBody: rawBody,
+          },
         },
       ]);
-      logInfo("channels.whatsapp_workflow_started", withOperationContext(op));
+      logInfo("channels.whatsapp_workflow_started", withOperationContext(op, {
+        forwardHeaderKeys: Object.keys(whatsappForwardHeaders).sort(),
+      }));
     } catch (error) {
       const dedupRelease = await releaseWhatsAppWebhookDedupLockForRetry(dedupLock);
       logWarn("channels.whatsapp_workflow_start_failed", withOperationContext(op, {

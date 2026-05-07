@@ -1,6 +1,6 @@
 ---
 name: slack-delivery
-description: Slack channel specialist workflow: debug Slack OAuth vs delivery-ready, /slack/events fast path, raw-body signatures, route repair, boot-message cleanup, and lastForward.
+description: "Slack channel specialist workflow: debug Slack OAuth vs delivery-ready, /slack/events fast path, raw-body signatures, route repair, boot-message cleanup, and lastForward."
 ---
 
 # Slack Delivery

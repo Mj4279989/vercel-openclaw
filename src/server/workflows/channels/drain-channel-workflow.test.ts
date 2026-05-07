@@ -436,7 +436,7 @@ test("processChannelStep keeps native forward 404 fatal (Telegram retrying path)
   );
 });
 
-test("processChannelStep uses retrying forward for Telegram and Slack, direct forward for WhatsApp", async () => {
+test("processChannelStep uses retrying forward for Telegram, Slack, Discord, and WhatsApp", async () => {
   let retryingCalled = false;
   let directCalled = false;
 
@@ -476,6 +476,31 @@ test("processChannelStep uses retrying forward for Telegram and Slack, direct fo
   retryingCalled = false;
   directCalled = false;
 
+  const discordDeps = createWorkflowDependencies({
+    forwardToNativeHandlerWithRetry: async (): Promise<RetryingForwardResult> => {
+      retryingCalled = true;
+      return { ok: true, status: 200, attempts: 1, totalMs: 50, transport: "public", retries: [] };
+    },
+    forwardToNativeHandler: async () => {
+      directCalled = true;
+      return { ok: true, status: 200, durationMs: 0, bodyLength: 0, bodyHead: "", headers: null };
+    },
+  });
+
+  await processChannelStep(
+    "discord",
+    { id: "interaction-retry-1", application_id: "app", token: "tok" },
+    "test",
+    "req-discord",
+    null,
+    { dependencies: discordDeps },
+  );
+  assert.ok(retryingCalled, "Discord should use retrying forward");
+  assert.ok(!directCalled, "Discord should not use direct forward");
+
+  retryingCalled = false;
+  directCalled = false;
+
   const whatsappDeps = createWorkflowDependencies({
     forwardToNativeHandlerWithRetry: async (): Promise<RetryingForwardResult> => {
       retryingCalled = true;
@@ -488,8 +513,8 @@ test("processChannelStep uses retrying forward for Telegram and Slack, direct fo
   });
 
   await processChannelStep("whatsapp", { entry: [] }, "test", "req-wa", null, { dependencies: whatsappDeps });
-  assert.ok(!retryingCalled, "WhatsApp should not use retrying forward");
-  assert.ok(directCalled, "WhatsApp should use direct forward");
+  assert.ok(retryingCalled, "WhatsApp should use retrying forward");
+  assert.ok(!directCalled, "WhatsApp should not use direct forward");
 });
 
 test("processChannelStep converts retrying forward 504 (exhausted) into RetryableError", async () => {
@@ -1622,4 +1647,158 @@ test("processChannelStep emits channels.slack_wake_summary for Slack requests", 
   // And telegram_wake_summary must NOT be emitted for Slack.
   const telegramSummaryLogs = logs.filter((entry) => entry.message === "channels.telegram_wake_summary");
   assert.equal(telegramSummaryLogs.length, 0);
+});
+
+test("processChannelStep passes Discord raw body and signature headers to retrying forward", async () => {
+  let capturedHeaders: Record<string, string> | null = null;
+  let capturedRawBody: string | null = null;
+  let capturedDeliveryId: string | null = null;
+
+  const dependencies = createWorkflowDependencies({
+    forwardToNativeHandlerWithRetry: async (
+      _channel,
+      _payload,
+      _meta,
+      _getSandboxDomain,
+      _localForward,
+      _preferLocal,
+      extraForwardHeaders,
+      rawBody,
+      deliveryId,
+    ): Promise<RetryingForwardResult> => {
+      capturedHeaders = extraForwardHeaders ?? null;
+      capturedRawBody = rawBody ?? null;
+      capturedDeliveryId = deliveryId ?? null;
+      return { ok: true, status: 200, attempts: 1, totalMs: 50, transport: "public", retries: [] };
+    },
+  });
+
+  await processChannelStep(
+    "discord",
+    { id: "interaction-handoff-1", application_id: "app", token: "tok" },
+    "test",
+    "req-discord-handoff",
+    null,
+    {
+      dependencies,
+      workflowHandoff: {
+        discordForwardHeaders: {
+          "x-signature-ed25519": "sig",
+          "x-signature-timestamp": "1700000000",
+          "content-type": "application/json",
+        },
+        discordRawBody: '{"id":"interaction-handoff-1"}',
+      } satisfies ChannelWorkflowHandoff,
+    },
+  );
+
+  assert.deepStrictEqual(capturedHeaders, {
+    "x-signature-ed25519": "sig",
+    "x-signature-timestamp": "1700000000",
+    "content-type": "application/json",
+  });
+  assert.equal(capturedRawBody, '{"id":"interaction-handoff-1"}');
+  assert.equal(capturedDeliveryId, "discord:interaction-handoff-1");
+});
+
+test("processChannelStep clears WhatsApp boot message after accepted forward", async () => {
+  _resetLogBuffer();
+  let clearCalls = 0;
+  let updateCalls = 0;
+
+  const dependencies = createWorkflowDependencies({
+    buildExistingBootHandle: async () => ({
+      async update() {
+        updateCalls += 1;
+      },
+      async clear() {
+        clearCalls += 1;
+      },
+    }),
+    forwardToNativeHandlerWithRetry: async (): Promise<RetryingForwardResult> => ({
+      ok: true,
+      status: 200,
+      attempts: 2,
+      totalMs: 150,
+      transport: "public",
+      retries: [{ attempt: 1, reason: "handler-not-ready", status: 404 }],
+    }),
+  });
+
+  await processChannelStep(
+    "whatsapp",
+    {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                messages: [{ id: "wamid.workflow-clear-1" }],
+              },
+            },
+          ],
+        },
+      ],
+    },
+    "test",
+    "req-wa-clear",
+    "wamid.boot-clear-1",
+    { dependencies },
+  );
+
+  assert.equal(clearCalls, 1);
+  assert.equal(updateCalls, 0);
+  const cleanupLog = getServerLogs().find(
+    (entry) => entry.message === "channels.whatsapp_boot_message_cleared_after_accept",
+  );
+  assert.ok(cleanupLog, "WhatsApp boot cleanup should be logged after native accept");
+  assert.equal(cleanupLog.data?.deliveryId, "whatsapp:wamid.workflow-clear-1");
+  assert.equal(cleanupLog.data?.forwardAttempts, 2);
+});
+
+test("processChannelStep emits Discord and WhatsApp wake summaries", async () => {
+  _resetLogBuffer();
+  const dependencies = createWorkflowDependencies({
+    forwardToNativeHandlerWithRetry: async (): Promise<RetryingForwardResult> => ({
+      ok: true,
+      status: 200,
+      attempts: 2,
+      totalMs: 250,
+      transport: "public",
+      retries: [{ attempt: 1, reason: "handler-not-ready", status: 404 }],
+    }),
+  });
+
+  await processChannelStep(
+    "discord",
+    { id: "interaction-summary-1", application_id: "app", token: "tok" },
+    "test",
+    "req-discord-summary",
+    null,
+    { dependencies, receivedAtMs: Date.now() - 20 },
+  );
+  await processChannelStep(
+    "whatsapp",
+    {
+      entry: [
+        {
+          changes: [
+            { value: { messages: [{ id: "wamid.summary-1" }] } },
+          ],
+        },
+      ],
+    },
+    "test",
+    "req-whatsapp-summary",
+    null,
+    { dependencies, receivedAtMs: Date.now() - 20 },
+  );
+
+  const logs = getServerLogs();
+  const discordSummary = logs.find((entry) => entry.message === "channels.discord_wake_summary");
+  const whatsappSummary = logs.find((entry) => entry.message === "channels.whatsapp_wake_summary");
+  assert.ok(discordSummary, "Discord wake summary should be emitted");
+  assert.ok(whatsappSummary, "WhatsApp wake summary should be emitted");
+  assert.equal(discordSummary.data?.retryingForwardAttempts, 2);
+  assert.equal(whatsappSummary.data?.retryingForwardRetries, 1);
 });

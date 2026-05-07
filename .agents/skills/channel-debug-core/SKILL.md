@@ -1,6 +1,6 @@
 ---
 name: channel-debug-core
-description: Channel webhook triage for vercel-openclaw Slack/Telegram/Discord/WhatsApp issues: prove deployment state, collect admin readiness endpoints, build evidence-first handoff before fixes.
+description: "Channel webhook triage for vercel-openclaw Slack/Telegram/Discord/WhatsApp issues: prove deployment state, collect admin readiness endpoints, build evidence-first handoff before fixes."
 ---
 
 # Channel Debug Core

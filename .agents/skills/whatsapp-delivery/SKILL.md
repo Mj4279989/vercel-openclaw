@@ -1,6 +1,6 @@
 ---
 name: whatsapp-delivery
-description: WhatsApp channel specialist workflow: debug Meta webhook verification/signatures, link-state projection, /whatsapp-webhook fast path, boot messages, and adapter delivery.
+description: "WhatsApp channel specialist workflow: debug Meta webhook verification/signatures, link-state projection, /whatsapp-webhook fast path, boot messages, and adapter delivery."
 ---
 
 # WhatsApp Delivery

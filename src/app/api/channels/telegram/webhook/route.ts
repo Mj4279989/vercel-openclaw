@@ -713,7 +713,7 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ ok: true });
     }
 
-    // Send "Waking up" boot message from the webhook route (before workflow)
+    // Send a wake boot message from the webhook route (before workflow)
     // so the user gets immediate feedback. The message ID is passed to the
     // workflow so the step can edit/delete it during processing.
     let bootMessageId: number | null = null;
@@ -722,7 +722,7 @@ export async function POST(request: Request): Promise<Response> {
         const result = await sendMessage(
           config.botToken,
           Number(chatId),
-          "🦞 Waking up\u2026 one moment.",
+          "🦞 Waking the sandbox. First reply after idle may be slow.",
           threadId !== null ? { messageThreadId: threadId } : undefined,
         );
         bootMessageId = result.message_id;

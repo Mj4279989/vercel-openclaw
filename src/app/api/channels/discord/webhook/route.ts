@@ -22,6 +22,12 @@ type DiscordWebhookDedupReleaseResult = {
   releaseError: string | null;
 };
 
+const DISCORD_FORWARD_HEADERS = [
+  "x-signature-ed25519",
+  "x-signature-timestamp",
+  "content-type",
+] as const;
+
 export const discordWebhookWorkflowRuntime = {
   start: workflowApi.start,
 };
@@ -37,6 +43,51 @@ function extractInteractionId(payload: unknown): string | null {
   }
 
   return null;
+}
+
+function collectForwardHeaders(
+  request: Request,
+  names: readonly string[],
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const name of names) {
+    const value = request.headers.get(name);
+    if (value) {
+      headers[name] = value;
+    }
+  }
+  return headers;
+}
+
+function extractDiscordInteractionInfo(payload: unknown): Record<string, unknown> {
+  if (!payload || typeof payload !== "object") {
+    return { payloadKeys: [] };
+  }
+  const raw = payload as {
+    id?: unknown;
+    type?: unknown;
+    application_id?: unknown;
+    channel_id?: unknown;
+    guild_id?: unknown;
+    user?: { id?: unknown };
+    member?: { user?: { id?: unknown } };
+    data?: { name?: unknown };
+  };
+  return {
+    interactionId: typeof raw.id === "string" ? raw.id : null,
+    type: typeof raw.type === "number" ? raw.type : null,
+    applicationId: typeof raw.application_id === "string" ? raw.application_id : null,
+    channelId: typeof raw.channel_id === "string" ? raw.channel_id : null,
+    guildId: typeof raw.guild_id === "string" ? raw.guild_id : null,
+    userId:
+      typeof raw.member?.user?.id === "string"
+        ? raw.member.user.id
+        : typeof raw.user?.id === "string"
+          ? raw.user.id
+          : null,
+    commandName: typeof raw.data?.name === "string" ? raw.data.name : null,
+    payloadKeys: Object.keys(raw).sort(),
+  };
 }
 
 function workflowStartFailedResponse() {
@@ -124,6 +175,10 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   if ((payload as { type?: unknown }).type === 1) {
+    logInfo("channels.discord_ping_ack", {
+      requestId,
+      ...extractDiscordInteractionInfo(payload),
+    });
     return Response.json({ type: 1 });
   }
 
@@ -164,10 +219,25 @@ export async function POST(request: Request): Promise<Response> {
     status: meta.status,
   });
 
-  logInfo("channels.discord_webhook_accepted", withOperationContext(op));
+  const discordForwardHeaders = collectForwardHeaders(
+    request,
+    DISCORD_FORWARD_HEADERS,
+  );
+  const handoffDelayMs = Date.now() - receivedAtMs;
+
+  logInfo("channels.discord_webhook_accepted", withOperationContext(op, {
+    ...extractDiscordInteractionInfo(payload),
+    ackSemantics: "deferred-only",
+    responseType: 5,
+    forwardHeaderKeys: Object.keys(discordForwardHeaders).sort(),
+  }));
 
   try {
     const origin = getPublicOrigin(request);
+    logInfo("channels.discord_workflow_starting", withOperationContext(op, {
+      handoffDelayMs,
+      forwardHeaderKeys: Object.keys(discordForwardHeaders).sort(),
+    }));
     await discordWebhookWorkflowRuntime.start(drainChannelWorkflow, [
       {
         version: 1,
@@ -176,9 +246,16 @@ export async function POST(request: Request): Promise<Response> {
         origin,
         requestId: requestId ?? null,
         receivedAtMs,
+        workflowHandoff: {
+          discordForwardHeaders,
+          discordRawBody: rawBody,
+        },
       },
     ]);
-    logInfo("channels.discord_workflow_started", withOperationContext(op));
+    logInfo("channels.discord_workflow_started", withOperationContext(op, {
+      handoffDelayMs,
+      forwardHeaderKeys: Object.keys(discordForwardHeaders).sort(),
+    }));
   } catch (error) {
     const dedupRelease = await releaseDiscordWebhookDedupLockForRetry(dedupLock);
     logWarn("channels.discord_workflow_start_failed", withOperationContext(op, {

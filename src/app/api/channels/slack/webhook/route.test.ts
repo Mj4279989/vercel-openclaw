@@ -234,7 +234,7 @@ test("Slack webhook: stopped sandbox posts boot message and starts wake workflow
       };
       assert.equal(body.channel, "C-wake");
       assert.equal(body.thread_ts, "1710000000.000100");
-      assert.match(body.text ?? "", /Waking up/);
+      assert.match(body.text ?? "", /Waking the sandbox/);
       return Response.json({ ok: true, ts: "boot-wake-ts" });
     });
 

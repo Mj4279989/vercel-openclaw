@@ -199,6 +199,119 @@ test("WhatsApp webhook: fast path gateway response falls through to workflow", a
   });
 });
 
+test("WhatsApp webhook: fast path 404 falls through to workflow with raw signature handoff", async () => {
+  await withHarness(async (h) => {
+    await configureWhatsApp(h);
+    await h.mutateMeta((meta) => {
+      meta.status = "running";
+      meta.sandboxId = "sbx-whatsapp-handler-not-ready";
+      meta.snapshotId = "snap-whatsapp-handler-not-ready";
+      meta.portUrls = {
+        "3000": "https://sbx-whatsapp-handler-not-ready-3000.fake.vercel.run",
+      };
+    });
+
+    h.fakeFetch.onPost(/whatsapp-webhook$/, () =>
+      new Response("Not Found", { status: 404 }),
+    );
+
+    const route = getWhatsAppWebhookRoute();
+    type CapturedWhatsAppEnvelope = {
+      workflowHandoff?: {
+        whatsappForwardHeaders?: Record<string, string>;
+        whatsappRawBody?: string;
+      };
+    };
+    const capturedEnvelopes: CapturedWhatsAppEnvelope[] = [];
+    const startMock = mock.method(whatsappWebhookWorkflowRuntime, "start", async (_workflow: unknown, args: unknown[]) => {
+      capturedEnvelopes.push(args[0] as CapturedWhatsAppEnvelope);
+    });
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "123456789" },
+                contacts: [{ wa_id: "15551234567" }],
+                messages: [
+                  {
+                    from: "15551234567",
+                    id: "wamid.handler-not-ready-1",
+                    type: "text",
+                    text: { body: "wake me" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const request = buildWhatsAppWebhook({ appSecret: APP_SECRET, payload });
+    const expectedRawBody = JSON.stringify(payload);
+
+    try {
+      const result = await callRoute(route.POST, request);
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.json, { ok: true });
+      assert.equal(startMock.mock.callCount(), 1);
+      assert.equal(capturedEnvelopes.length, 1);
+      const envelope = capturedEnvelopes[0]!;
+      const handoff = envelope.workflowHandoff;
+      assert.ok(handoff, "workflow handoff should be present");
+      assert.equal(handoff.whatsappRawBody, expectedRawBody);
+      assert.equal(
+        handoff.whatsappForwardHeaders?.["x-hub-signature-256"],
+        request.headers.get("x-hub-signature-256"),
+      );
+      assert.equal(handoff.whatsappForwardHeaders?.["content-type"], "application/json");
+      resetAfterCallbacks();
+    } finally {
+      startMock.mock.restore();
+    }
+  });
+});
+
+test("WhatsApp webhook: non-message callback skips workflow", async () => {
+  await withHarness(async (h) => {
+    await configureWhatsApp(h);
+    const route = getWhatsAppWebhookRoute();
+    const startMock = mock.method(whatsappWebhookWorkflowRuntime, "start", async () => {});
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                statuses: [{ id: "wamid.status-1", status: "delivered" }],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    try {
+      const result = await callRoute(
+        route.POST,
+        buildWhatsAppWebhook({ appSecret: APP_SECRET, payload }),
+      );
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.json, { ok: true });
+      assert.equal(startMock.mock.callCount(), 0);
+      assert.ok(
+        getServerLogs().some((entry) => entry.message === "channels.whatsapp_webhook_non_message_skip"),
+        "non-message callback skip should be logged",
+      );
+    } finally {
+      startMock.mock.restore();
+    }
+  });
+});
+
 test("WhatsApp webhook: fast path refreshes AI Gateway token before native forward", async () => {
   await withHarness(async (h) => {
     await configureWhatsApp(h);

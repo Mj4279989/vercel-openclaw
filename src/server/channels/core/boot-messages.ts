@@ -10,30 +10,86 @@ import {
   ensureSandboxRunning,
   probeGatewayReady,
 } from "@/server/sandbox/lifecycle";
+import {
+  readSetupProgress,
+  type SetupPhase,
+} from "@/server/sandbox/setup-progress";
 import { getInitializedMeta } from "@/server/store/store";
 
 const BOOT_MESSAGE_INITIAL =
-  "🦞 Waking up\u2026 sleeping sandbox. Future replies will be instant.";
+  "🦞 Waking the sandbox. First reply after idle may be slow.";
 
 const STATUS_MESSAGES: Partial<Record<SingleMeta["status"], string>> = {
-  restoring: "🦞 Restoring Sandbox\u2026",
+  restoring: "🦞 Resuming sandbox\u2026",
   creating: "🦞 Creating sandbox\u2026",
-  setup: "🦞 Verifying config\u2026",
-  booting: "🦞 Starting OpenClaw\u2026",
-  running: "🦞 Connecting\u2026",
+  setup: "🦞 Syncing channel config\u2026",
+  booting: "🦞 Starting OpenClaw gateway\u2026",
+  running: "🦞 Sending your message\u2026",
 };
 
 const TELEGRAM_STATUS_MESSAGES: Partial<Record<SingleMeta["status"], string>> = {
-  setup: "🦞 Starting Telegram listener\u2026",
-  booting: "🦞 Starting Telegram listener\u2026",
-  running: "🦞 Delivering your message\u2026",
+  running: "🦞 Verifying Telegram listener\u2026",
 };
 
-function statusMessageFor(channel: ChannelName, status: SingleMeta["status"]): string | undefined {
+const SLACK_STATUS_MESSAGES: Partial<Record<SingleMeta["status"], string>> = {
+  running: "🦞 Verifying Slack route\u2026",
+};
+
+const SETUP_PHASE_MESSAGES: Partial<Record<SetupPhase, string>> = {
+  "creating-sandbox": "🦞 Creating sandbox\u2026",
+  "resuming-sandbox": "🦞 Resuming sandbox\u2026",
+  "downloading-bundle": "🦞 Downloading OpenClaw bundle\u2026",
+  "installing-openclaw": "🦞 Preparing OpenClaw\u2026",
+  "installing-bun": "🦞 Preparing runtime\u2026",
+  "cleaning-cache": "🦞 Cleaning cache\u2026",
+  "installing-peer-deps": "🦞 Installing channel dependencies\u2026",
+  "patching-openclaw": "🦞 Patching OpenClaw\u2026",
+  "installing-plugin": "🦞 Loading channel plugin\u2026",
+  "writing-config": "🦞 Syncing channel config\u2026",
+  "checking-version": "🦞 Checking OpenClaw version\u2026",
+  "starting-gateway": "🦞 Starting OpenClaw gateway\u2026",
+  "waiting-for-gateway": "🦞 Waiting for gateway\u2026",
+  "pairing-device": "🦞 Pairing device\u2026",
+  "applying-firewall": "🦞 Applying network policy\u2026",
+  ready: "🦞 Sending your message\u2026",
+};
+
+function channelStatusMessageFor(
+  channel: ChannelName,
+  status: SingleMeta["status"],
+): string | undefined {
   if (channel === "telegram") {
     return TELEGRAM_STATUS_MESSAGES[status] ?? STATUS_MESSAGES[status];
   }
+  if (channel === "slack") {
+    return SLACK_STATUS_MESSAGES[status] ?? STATUS_MESSAGES[status];
+  }
   return STATUS_MESSAGES[status];
+}
+
+async function statusMessageFor(
+  channel: ChannelName,
+  meta: SingleMeta,
+): Promise<string | undefined> {
+  if (["creating", "restoring", "setup", "booting"].includes(meta.status)) {
+    const progress = await readSetupProgress(meta.id).catch((error) => {
+      logWarn("channels.boot_message_setup_progress_read_failed", {
+        channel,
+        status: meta.status,
+        instanceId: meta.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    if (progress?.active) {
+      const phaseMessage = SETUP_PHASE_MESSAGES[progress.phase];
+      if (phaseMessage) {
+        return phaseMessage;
+      }
+    }
+  }
+
+  return channelStatusMessageFor(channel, meta.status);
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
@@ -107,7 +163,7 @@ function assessTelegramRestoreReadiness(
  * Wake the sandbox with phased boot status messages.
  *
  * If the sandbox is already running, returns immediately without sending
- * a boot message. Otherwise sends "🦞 Waking up…" and progressively updates
+ * a boot message. Otherwise sends "🦞 Waking the sandbox." and progressively updates
  * the message as the sandbox transitions through restore phases.
  */
 export async function runWithBootMessages<
@@ -160,7 +216,10 @@ export async function runWithBootMessages<
     if (existingBootHandle) {
       if (deferCleanupToCaller) {
         void existingBootHandle
-          .update(statusMessageFor(channel, "running") ?? "🦞 Connecting\u2026")
+          .update(
+            channelStatusMessageFor(channel, "running") ??
+              "🦞 Sending your message\u2026",
+          )
           .catch((error) => {
             logWarn("channels.boot_message_update_failed", {
               channel,
@@ -203,6 +262,9 @@ export async function runWithBootMessages<
   logInfo("channels.boot_message_sent", { channel });
 
   let lastStatus: string | null = null;
+  let lastBootMessageText: string | null = existingBootHandle
+    ? null
+    : BOOT_MESSAGE_INITIAL;
   const deadline = Date.now() + timeoutMs;
 
   try {
@@ -213,16 +275,18 @@ export async function runWithBootMessages<
 
       if (meta.status !== lastStatus) {
         lastStatus = meta.status;
-        const statusMessage = statusMessageFor(channel, meta.status);
-        if (statusMessage) {
-          void handle.update(statusMessage).catch((error) => {
-            logWarn("channels.boot_message_update_failed", {
-              channel,
-              status: meta.status,
-              error: error instanceof Error ? error.message : String(error),
-            });
+      }
+
+      const statusMessage = await statusMessageFor(channel, meta);
+      if (statusMessage && statusMessage !== lastBootMessageText) {
+        lastBootMessageText = statusMessage;
+        void handle.update(statusMessage).catch((error) => {
+          logWarn("channels.boot_message_update_failed", {
+            channel,
+            status: meta.status,
+            error: error instanceof Error ? error.message : String(error),
           });
-        }
+        });
       }
 
       if (meta.status === "running" && meta.sandboxId) {
@@ -248,7 +312,10 @@ export async function runWithBootMessages<
         const probe = await probeGatewayReady();
         if (probe.ready) {
           void handle
-            .update(statusMessageFor(channel, "running") ?? "Processing your message\u2026")
+            .update(
+              channelStatusMessageFor(channel, "running") ??
+                "🦞 Sending your message\u2026",
+            )
             .catch((error) => {
               logWarn("channels.boot_message_update_failed", {
                 channel,

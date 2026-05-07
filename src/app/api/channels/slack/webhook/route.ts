@@ -725,7 +725,7 @@ export async function POST(request: Request): Promise<Response> {
     // emitted channels.dedup_lock_acquire_failed_degraded.
   }
 
-  // Send "Waking up" boot message from the webhook route (before workflow)
+  // Send a wake boot message from the webhook route (before workflow)
   // so the user gets immediate feedback. The message ts is passed to the
   // workflow so the step can update/delete it during processing.
   let bootMessageTs: string | null = null;
@@ -740,7 +740,7 @@ export async function POST(request: Request): Promise<Response> {
         body: JSON.stringify({
           channel: eventInfo.channel,
           ...(eventInfo.threadTs ? { thread_ts: eventInfo.threadTs } : {}),
-          text: "🦞 Waking up\u2026 the first reply after idle is slow. Future replies in this channel will be instant.",
+          text: "🦞 Waking the sandbox. First reply after idle may be slow.",
         }),
         signal: AbortSignal.timeout(SLACK_BOOT_MESSAGE_TIMEOUT_MS),
       });
@@ -794,7 +794,7 @@ export async function POST(request: Request): Promise<Response> {
     // Best-effort delete the boot message we posted just before this failed
     // workflow start. Slack will not auto-retry the webhook (we return 5xx),
     // and the user will eventually retry manually — leaving a dangling
-    // "Waking up…" placeholder looks broken. Symmetric to the Telegram path.
+    // boot placeholder looks broken. Symmetric to the Telegram path.
     if (bootMessageTs && eventInfo.channel) {
       try {
         await fetch("https://slack.com/api/chat.delete", {

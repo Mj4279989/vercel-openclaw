@@ -1,6 +1,6 @@
 ---
 name: telegram-native-8787
-description: Telegram channel specialist workflow: debug /api/channels/telegram/webhook, native port 8787 /telegram-webhook, webhookSecret, boot cleanup, and post-accept reply visibility.
+description: "Telegram channel specialist workflow: debug /api/channels/telegram/webhook, native port 8787 /telegram-webhook, webhookSecret, boot cleanup, and post-accept reply visibility."
 ---
 
 # Telegram Native 8787

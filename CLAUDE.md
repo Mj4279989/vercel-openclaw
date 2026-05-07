@@ -139,17 +139,28 @@ This makes rollback and review sane and forces honest scoping.
 
 ### Codex channel specialists
 
-For channel delivery work, use repo-local skills instead of expanding this file. Start with `$channel-debug-core`; use `$channel-forward-parity` before changing any webhook route or shared channel workflow.
+Use the repo-local Codex channel specialists for Slack, Telegram, Discord, and WhatsApp delivery work. The custom agent role files live in `.codex/agents/*.toml`; the reusable playbooks live in `.agents/skills/*/SKILL.md`. Codex loads `.agents/skills` as shared skills, but channel specialist roles must stay in `.codex/agents`.
 
-For parallel triage, explicitly spawn project agents:
-- `channel_telegram` owns Telegram webhook/native 8787 evidence.
-- `channel_slack` owns Slack OAuth/fast-path/signature evidence.
-- `channel_discord` owns Discord interaction/deferred-reply evidence.
-- `channel_whatsapp` owns WhatsApp Meta webhook/link-state evidence.
+Start every channel incident with `$channel-debug-core`; it requires deployment proof, the admin readiness surfaces, a runtime path diagram, a hypothesis table, and a handoff before any fix. Use `$channel-forward-parity` before changing a webhook route or `src/server/workflows/channels/drain-channel-workflow.ts`.
+
+For parallel triage, explicitly spawn project agents and keep ownership narrow:
+
+| Channel | Agent | Primary skill | Evidence focus |
+| --- | --- | --- | --- |
+| Telegram | `channel_telegram` | `telegram-native-8787` | Native port 8787, webhook secret flow, boot cleanup, user-visible replies |
+| Slack | `channel_slack` | `slack-delivery` | OAuth vs delivery-ready, raw-body signature forwarding, `/slack/events` fast path |
+| Discord | `channel_discord` | `discord-delivery` | Ed25519 verification, interaction deferral, token expiry, workflow forwarding |
+| WhatsApp | `channel_whatsapp` | `whatsapp-delivery` | Meta verification, raw-body signatures, link-state projection, boot messages |
 
 Each specialist must return `.agents/skills/channel-debug-core/references/handoff-template.md` before proposing a fix. Specialists may read shared channel core files, but only one implementation owner may edit shared workflow/readiness/summary code in a given task.
 
-Save runtime evidence under `.agent-runs/channel-debug/<timestamp>/` and do not commit it. Always report route-ready, native-accepted, and user-visible-reply separately.
+Required debugging flow:
+
+1. Prove the deployed runtime matches the source: `git rev-parse HEAD`, `git ls-remote origin main`, and a live `GET /api/admin/sandbox-diag` or equivalent build/deploy signal.
+2. Collect `GET /api/admin/why-not-ready`, `GET /api/channels/summary`, `GET /api/admin/sandbox-diag`, and `GET /api/admin/logs` before editing code.
+3. Mark each runtime edge `unknown`, `verified-good`, or `verified-bad`. Do not propose a fix until at least one edge is `verified-bad`.
+4. Report `route-ready`, `native-accepted`, and `user-visible-reply` separately. A green `lastForward` is not proof that a human saw a reply.
+5. Save raw runtime evidence under `.agent-runs/channel-debug/<timestamp>/` and do not commit it. Redact admin secrets, bypass secrets, bot tokens, webhook secrets, and platform access tokens.
 
 1. **`GET /api/admin/why-not-ready`** — aggregator. Returns typed `blockers` per channel with `kind`, `evidence`, `suggestedAction`. Single round-trip to "why is this channel red right now?". Implementation: `src/server/admin/why-not-ready.ts` → `buildWhyNotReady()`.
 2. **`GET /api/channels/summary`** — operator-facing readiness. The `slack.lastForward` (and equivalents for other channels) is the live forward outcome from `meta.channelDiagnostics.<ch>.lastForward`: `{ ok, status, classification, attempts, totalMs, sandboxUrl, sandboxId, finalReasonHead, completedAt, ageMs }`. **A green `lastForward.ok:true classification:"accepted"` within 5 minutes overrides a stale `liveConfigSync.outcome:"failed"`** (`src/app/api/channels/summary/route.ts` `buildSlackSummaryEntry`).

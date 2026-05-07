@@ -1,6 +1,6 @@
 ---
 name: discord-delivery
-description: Discord channel specialist workflow: debug interaction webhooks, Ed25519 signatures, deferred replies, workflow forwarding to /discord-webhook, integration reconcile, and token expiry.
+description: "Discord channel specialist workflow: debug interaction webhooks, Ed25519 signatures, deferred replies, workflow forwarding to /discord-webhook, integration reconcile, and token expiry."
 ---
 
 # Discord Delivery

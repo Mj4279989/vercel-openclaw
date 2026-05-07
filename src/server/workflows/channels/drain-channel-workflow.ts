@@ -9,6 +9,7 @@ import type { QueuedChannelJob } from "@/server/channels/driver";
 import { extractTelegramChatId } from "@/server/channels/telegram/adapter";
 import { deleteMessage, editMessageText } from "@/server/channels/telegram/bot-api";
 import { deleteMessage as deleteWhatsAppMessage } from "@/server/channels/whatsapp/whatsapp-api";
+import { extractWhatsAppMessageId } from "@/server/channels/whatsapp/adapter";
 import { recordChannelDlqFailure } from "@/server/channels/dlq";
 import { logError, logInfo, logWarn } from "@/server/log";
 import { recordChannelLastForward } from "@/server/channels/last-forward";
@@ -203,6 +204,18 @@ function extractChannelDeliveryId(
       return `slack:${chan}:${ts}`;
     }
   }
+  if (channel === "discord") {
+    const interactionId = (p as { id?: unknown } | null)?.id;
+    if (typeof interactionId === "string" && interactionId.length > 0) {
+      return `discord:${interactionId}`;
+    }
+  }
+  if (channel === "whatsapp") {
+    const messageId = extractWhatsAppMessageId(payload);
+    if (messageId) {
+      return `whatsapp:${messageId}`;
+    }
+  }
   const fallbackBody = `${requestId ?? ""}:${receivedAtMs ?? ""}:${JSON.stringify(p ?? {})}`;
   const hash = createHash("sha256").update(fallbackBody).digest("hex").slice(0, 32);
   return `${channel}:${hash}`;
@@ -340,6 +353,10 @@ export type ChannelWorkflowHandoff = {
   fallbackTelegramConfig?: TelegramChannelConfig | null;
   slackForwardHeaders?: Record<string, string> | null;
   slackRawBody?: string | null;
+  discordForwardHeaders?: Record<string, string> | null;
+  discordRawBody?: string | null;
+  whatsappForwardHeaders?: Record<string, string> | null;
+  whatsappRawBody?: string | null;
 };
 
 // Versioned workflow envelope. All new callers pass a single v1 envelope
@@ -1026,7 +1043,7 @@ export async function processChannelStep(
         deliveryId,
       );
       forwardResult = { ok: retryingResult.ok, status: retryingResult.status };
-    } else {
+    } else if (channel === "discord" || channel === "whatsapp") {
       // Second Discord deadline check: sandbox wake can eat most of the
       // 15-minute interaction token budget. If we're past the soft
       // deadline now, don't bother forwarding — OpenClaw's native
@@ -1054,6 +1071,29 @@ export async function processChannelStep(
           );
         }
       }
+      const extraForwardHeaders = channel === "discord"
+        ? options?.workflowHandoff?.discordForwardHeaders ?? null
+        : options?.workflowHandoff?.whatsappForwardHeaders ?? null;
+      const rawBody = channel === "discord"
+        ? options?.workflowHandoff?.discordRawBody ?? null
+        : options?.workflowHandoff?.whatsappRawBody ?? null;
+      diag[`${channel}ForwardHeaderKeys`] = extraForwardHeaders
+        ? Object.keys(extraForwardHeaders).sort()
+        : null;
+      diag[`${channel}ForwardUsesRawBody`] = Boolean(rawBody);
+      retryingResult = await forwardToNativeHandlerWithRetry(
+        channel as ChannelName,
+        payload,
+        effectiveReadyMeta,
+        getSandboxDomain,
+        null,
+        false,
+        extraForwardHeaders,
+        rawBody,
+        deliveryId,
+      );
+      forwardResult = { ok: retryingResult.ok, status: retryingResult.status };
+    } else {
       forwardResult = await forwardToNativeHandler(
         channel as ChannelName,
         payload,
@@ -1231,6 +1271,40 @@ export async function processChannelStep(
       });
     }
 
+    if (channel === "discord" || channel === "whatsapp") {
+      const restore = effectiveReadyMeta.lastRestoreMetrics;
+      logInfo(`channels.${channel}_wake_summary`, {
+        channel,
+        requestId,
+        sandboxId: effectiveReadyMeta.sandboxId,
+        bootResultStatus: bootResult.meta.status,
+        webhookToWorkflowMs: typeof receivedAtMs === "number" ? Math.max(0, workflowStartedAt - receivedAtMs) : null,
+        workflowToSandboxReadyMs: sandboxReadyAt - workflowStartedAt,
+        forwardMs: forwardCompletedAt - forwardStartedAt,
+        endToEndMs: typeof receivedAtMs === "number" ? Math.max(0, forwardCompletedAt - receivedAtMs) : null,
+        restoreTotalMs: restore?.totalMs ?? null,
+        sandboxCreateMs: restore?.sandboxCreateMs ?? null,
+        assetSyncMs: restore?.assetSyncMs ?? null,
+        startupScriptMs: restore?.startupScriptMs ?? null,
+        localReadyMs: restore?.localReadyMs ?? null,
+        publicReadyMs: restore?.publicReadyMs ?? null,
+        bootOverlapMs: restore?.bootOverlapMs ?? null,
+        skippedStaticAssetSync: restore?.skippedStaticAssetSync ?? null,
+        skippedDynamicConfigSync: restore?.skippedDynamicConfigSync ?? null,
+        dynamicConfigReason: restore?.dynamicConfigReason ?? null,
+        forwardHeaderKeys: diag[`${channel}ForwardHeaderKeys`] ?? null,
+        forwardUsesRawBody: diag[`${channel}ForwardUsesRawBody`] ?? null,
+        retryingForwardAttempts: retryingResult?.attempts ?? null,
+        retryingForwardTotalMs: retryingResult?.totalMs ?? null,
+        retryingForwardTransport: retryingResult?.transport ?? null,
+        retryingForwardRetries: retryingResult?.retries?.length ?? null,
+        retryingForwardAttemptTimeline: retryingResult?.attemptsDetail ?? null,
+        hotSpareHit: restore?.hotSpareHit ?? null,
+        hotSparePromotionMs: restore?.hotSparePromotionMs ?? null,
+        hotSpareRejectReason: restore?.hotSpareRejectReason ?? null,
+      });
+    }
+
     // Boot-message cleanup. Slack keeps a "dead-time" status message visible
     // while OpenClaw/Claude generates the real reply (~5s), then the Slack
     // webhook deletes it when OpenClaw's reply event arrives. Telegram has no
@@ -1239,7 +1313,7 @@ export async function processChannelStep(
     if (existingBootHandle) {
       if (channel === "slack" && forwardResult.ok) {
         await existingBootHandle
-          .update("🦞 Almost ready\u2026")
+          .update("🦞 Message sent. Waiting for the reply\u2026")
           .catch(() => {});
         const slackPayload = payload as {
           event?: {
@@ -1262,7 +1336,7 @@ export async function processChannelStep(
         // Trade-off: concurrent top-level mentions in the same channel
         // share one list and the first bot reply clears them all. That is
         // strictly better than the previous behaviour, which left every
-        // top-level "🦞 Almost ready…" placeholder dangling until TTL.
+        // top-level boot placeholder dangling until TTL.
         const threadTs =
           typeof slackPayload?.event?.thread_ts === "string" &&
           slackPayload.event.thread_ts.length > 0
@@ -1312,10 +1386,40 @@ export async function processChannelStep(
                   : String(bootError),
             });
           });
+      } else if (channel === "whatsapp" && forwardResult.ok) {
+        diag.bootMessageAction = "whatsapp-cleared-after-native-accept";
+        diag.bootMessageClearedAt = Date.now();
+        await existingBootHandle
+          .clear()
+          .then(() => {
+            logInfo("channels.whatsapp_boot_message_cleared_after_accept", {
+              channel,
+              requestId,
+              deliveryId,
+              bootMessageId: bootMessageId ?? null,
+              forwardStatus: forwardResult.status,
+              forwardAttempts: retryingResult?.attempts ?? null,
+              forwardTotalMs: retryingResult?.totalMs ?? null,
+              reason: "native_handler_accepted_update",
+            });
+          })
+          .catch((bootError) => {
+            logWarn("channels.whatsapp_boot_message_cleanup_after_accept_failed", {
+              channel,
+              requestId,
+              deliveryId,
+              bootMessageId: bootMessageId ?? null,
+              forwardStatus: forwardResult.status,
+              error:
+                bootError instanceof Error
+                  ? bootError.message
+                  : String(bootError),
+            });
+          });
       } else {
         // Forward failed. Instead of silently deleting the boot message
         // (which left the user staring at an empty channel after their
-        // "🦞 Waking up…" placeholder vanished), edit it to a status-
+        // boot placeholder vanished), edit it to a status-
         // appropriate message so they know whether we're still trying
         // or have given up. A retryable 5xx becomes a RetryableError
         // upstream and the workflow step re-enters from the top; keep
@@ -1325,8 +1429,8 @@ export async function processChannelStep(
         await existingBootHandle
           .update(
             retryableForwardFailure
-              ? "🦞 Still trying to reach the assistant\u2026"
-              : "🦞 Couldn't reach the assistant — try again in a minute.",
+              ? "🦞 Route not ready yet. Retrying\u2026"
+              : "🦞 Channel route failed. Try again in a minute.",
           )
           .catch((bootError) => {
             logWarn("channels.workflow_boot_forward_failure_update_failed", {
@@ -1390,7 +1494,7 @@ export async function processChannelStep(
     // and post-forward throws both land here. Slack/Telegram pass
     // deferCleanupToCaller: true so the boot message is still alive —
     // surface the terminal vs retryable state to the user instead of
-    // letting "🦞 Waking up…" linger forever (terminal) or vanish
+    // letting the boot placeholder linger forever (terminal) or vanish
     // silently (retryable). Best effort: boot-handle errors must not
     // shadow the original workflow failure being thrown.
     //
@@ -1403,7 +1507,7 @@ export async function processChannelStep(
             ? "🦞 The sandbox is having trouble. Our team has been notified."
             : terminal
               ? "🦞 Something went wrong — try again in a moment."
-              : "🦞 Still waking up\u2026 retrying.",
+              : "🦞 Still waking the sandbox. Retrying\u2026",
         )
         .catch((bootError) => {
           logWarn("channels.workflow_boot_failure_update_failed", {
@@ -1950,11 +2054,6 @@ async function forwardToNativeHandler(
     case "slack": {
       const sandboxUrl = await getSandboxDomain();
       forwardUrl = `${sandboxUrl}/slack/events`;
-      if (extraForwardHeaders) {
-        for (const [k, v] of Object.entries(extraForwardHeaders)) {
-          headers[k] = v;
-        }
-      }
       break;
     }
     case "whatsapp": {
@@ -1971,11 +2070,16 @@ async function forwardToNativeHandler(
       throw new Error(`unsupported_native_forward_channel:${channel}`);
   }
 
-  // Slack Bolt HMAC-verifies signatures over the exact raw request bytes. Any
-  // re-serialization (even with the same keys) produces a different byte
-  // sequence and fails verification with 401. When rawBody is provided, use
-  // it verbatim; otherwise fall back to re-serializing the parsed payload.
-  const forwardBody = channel === "slack" && rawBody != null
+  if (extraForwardHeaders) {
+    for (const [k, v] of Object.entries(extraForwardHeaders)) {
+      headers[k] = v;
+    }
+  }
+
+  // Signature-verifying channel handlers need the exact raw request bytes.
+  // Any re-serialization can produce a different byte sequence and fail native
+  // verification with 401. When rawBody is provided, use it verbatim.
+  const forwardBody = rawBody != null
     ? rawBody
     : JSON.stringify(payload);
 
@@ -2066,7 +2170,7 @@ function shouldAttemptAiGatewayCredentialRecovery(
   status: number,
 ): boolean {
   if (status === 403) return true;
-  if (status === 401) return channel !== "slack";
+  if (status === 401) return channel === "telegram";
   return false;
 }
 

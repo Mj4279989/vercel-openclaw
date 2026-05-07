@@ -214,6 +214,29 @@ pnpm dev
 
 With `LOCAL_READ_ONLY=1`, `POST /api/admin/stop`, `/ensure`, `/reset`, `/snapshot`, and channel config writes all return `403 { error: "LOCAL_READ_ONLY" }` before touching the sandbox SDK. Reads (`/api/status`, `/api/admin/preflight`, `/api/admin/logs`) still work. Unset the variable when you actually want to test a mutation.
 
+## Debugging channels with agents
+
+Channel delivery has several independent states: the app can be connected, the sandbox can be running, the native handler can accept a forward, and the user still might not see a reply. When Slack, Telegram, Discord, or WhatsApp is stuck, use the repo-local Codex agents and skills to split evidence gathering by channel instead of guessing from one readiness label.
+
+Codex custom agent roles live in `.codex/agents/*.toml`; shared debugging playbooks live in `.agents/skills/*/SKILL.md`. Use the channel agents for parallel triage and the skills for repeatable evidence collection:
+
+| Channel | Agent | Primary skill | Focus |
+| ------- | ----- | ------------- | ----- |
+| Telegram | `channel_telegram` | `telegram-native-8787` | Native port 8787, webhook secret flow, boot cleanup, user-visible replies |
+| Slack | `channel_slack` | `slack-delivery` | OAuth vs delivery readiness, raw-body signature forwarding, `/slack/events` fast path |
+| Discord | `channel_discord` | `discord-delivery` | Ed25519 verification, interaction deferral, token expiry, workflow forwarding |
+| WhatsApp | `channel_whatsapp` | `whatsapp-delivery` | Meta verification, raw-body signatures, link-state projection, boot messages |
+
+For any channel incident, start with `$channel-debug-core`. It requires deployment-state proof, the admin readiness surfaces, a runtime path diagram, a hypothesis table, and a channel handoff before proposing a fix. Before changing webhook routes or the shared workflow, use `$channel-forward-parity` to verify every terminal path logs, updates `lastForward`, classifies failures, and refreshes stale sandbox port URLs when needed.
+
+Suggested workflow:
+
+1. Prove the deployed runtime matches the source you are reading: local `git rev-parse HEAD`, remote `git ls-remote origin main`, and live `GET /api/admin/sandbox-diag`.
+2. Collect `GET /api/admin/why-not-ready`, `GET /api/channels/summary`, `GET /api/admin/sandbox-diag`, and `GET /api/admin/logs` before editing code.
+3. If multiple channels are suspect, explicitly spawn the relevant channel agents and ask each to return `.agents/skills/channel-debug-core/references/handoff-template.md`.
+4. Keep `route-ready`, `native-accepted`, and `user-visible-reply` separate in the report. A green `lastForward` is not proof that the user saw a message.
+5. Save raw runtime evidence under `.agent-runs/channel-debug/<timestamp>/` and do not commit it.
+
 ## Documentation
 
 | Document | Contents |

@@ -14,6 +14,7 @@ import test from "node:test";
 
 import {
   channelDedupKey,
+  channelPendingBootMessageKey,
   channelUserMessageDedupKey,
 } from "@/server/channels/keys";
 import { getStore } from "@/server/store/store";
@@ -493,6 +494,86 @@ test("Slack webhook: fast path refreshes AI Gateway token before native forward"
     } finally {
       startMock.mock.restore();
       _setAiGatewayTokenOverrideForTesting(null);
+    }
+  });
+});
+
+test("Slack webhook: running fast path posts processing placeholder before native forward", async () => {
+  await withHarness(async (h) => {
+    await configureSlack(h);
+    _resetLogBuffer();
+    await h.mutateMeta((meta) => {
+      meta.status = "running";
+      meta.sandboxId = "sbx-slack-fast-path-placeholder";
+      meta.snapshotId = "snap-slack-fast-path-placeholder";
+      meta.portUrls = {
+        "3000": "https://sbx-slack-fast-path-placeholder-3000.fake.vercel.run",
+      };
+    });
+
+    h.fakeFetch.onGet("https://sbx-slack-fast-path-placeholder-3000.fake.vercel.run", () => gatewayReadyResponse());
+
+    let sawPlaceholderBeforeForward = false;
+    h.fakeFetch.onPost(/slack\.com\/api\/chat\.postMessage$/, (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        channel?: string;
+        thread_ts?: string;
+        text?: string;
+      };
+      assert.equal(body.channel, "C-fast-placeholder");
+      assert.equal(body.thread_ts, "1710000000.000200");
+      assert.equal(body.text, "_Thinking..._");
+      sawPlaceholderBeforeForward = true;
+      return Response.json({ ok: true, ts: "placeholder-fast-ts" });
+    });
+    h.fakeFetch.onPost(/slack\/events$/, () => {
+      assert.equal(
+        sawPlaceholderBeforeForward,
+        true,
+        "processing placeholder should be posted before native forward",
+      );
+      return new Response("ok", { status: 200 });
+    });
+
+    const payload = {
+      type: "event_callback",
+      event_id: "Ev_FAST_PLACEHOLDER",
+      event: {
+        type: "message",
+        text: "hello slow bot",
+        channel: "C-fast-placeholder",
+        ts: "1710000000.000200",
+        user: "U-user",
+      },
+    };
+    const route = getSlackWebhookRoute();
+    const startMock = mock.method(slackWebhookWorkflowRuntime, "start", async () => {});
+
+    try {
+      const result = await callRoute(
+        route.POST,
+        buildSlackWebhook({ signingSecret: SLACK_SIGNING_SECRET, payload }),
+      );
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.json, { ok: true });
+      assert.equal(startMock.mock.callCount(), 0);
+
+      const pending = await getStore().getValue<unknown>(
+        channelPendingBootMessageKey(
+          "slack",
+          "C-fast-placeholder",
+          "1710000000.000200",
+        ),
+      );
+      assert.deepEqual(pending, ["placeholder-fast-ts"]);
+      assert.ok(
+        getServerLogs().some(
+          (entry) => entry.message === "channels.slack_fast_path_processing_placeholder_sent",
+        ),
+      );
+      resetAfterCallbacks();
+    } finally {
+      startMock.mock.restore();
     }
   });
 });

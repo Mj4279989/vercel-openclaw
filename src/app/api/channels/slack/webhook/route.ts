@@ -27,6 +27,9 @@ import { getSandboxDomain, markSandboxPortUrlStale, probeGatewayReady, reconcile
 import { getInitializedMeta, getStore } from "@/server/store/store";
 const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 const SLACK_BOOT_MESSAGE_TIMEOUT_MS = 5_000;
+const SLACK_FAST_PATH_PROCESSING_MESSAGE_TIMEOUT_MS = 2_000;
+const SLACK_PROCESSING_PLACEHOLDER_TEXT = "_Thinking..._";
+const PENDING_BOOT_MESSAGE_TTL_SECONDS = 60 * 60;
 // The fast path intentionally awaits the native handler's full turn
 // (including long AI work like image generation). Keep this generous
 // enough to cover real long turns but short enough to avoid burning
@@ -127,6 +130,98 @@ function pendingBootTsList(value: unknown): string[] {
     return value.filter((v): v is string => typeof v === "string" && v.length > 0);
   }
   return [];
+}
+
+async function sendSlackFastPathProcessingPlaceholder(input: {
+  botToken: string;
+  channel: string | null;
+  threadRoot: string | null;
+  requestId: string | null;
+  op: ReturnType<typeof createOperationContext>;
+}): Promise<string | null> {
+  if (!input.channel || !input.threadRoot) return null;
+
+  const pendingKey = channelPendingBootMessageKey(
+    "slack",
+    input.channel,
+    input.threadRoot,
+  );
+  const pendingLockKey = channelPendingBootMessageLockKey(
+    "slack",
+    input.channel,
+    input.threadRoot,
+  );
+  const store = getStore();
+  const lockToken = await store.acquireLock(pendingLockKey, 5).catch(() => null);
+  try {
+    const existing = pendingBootTsList(await store.getValue<unknown>(pendingKey));
+    if (existing.length > 0) {
+      logInfo("channels.slack_fast_path_processing_placeholder_skipped", withOperationContext(input.op, {
+        reason: "pending_placeholder_exists",
+        channel: input.channel,
+        threadRoot: input.threadRoot,
+        requestId: input.requestId,
+        pendingCount: existing.length,
+      }));
+      return null;
+    }
+
+    const resp = await fetch(SLACK_POST_MESSAGE_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.botToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: input.channel,
+        thread_ts: input.threadRoot,
+        text: SLACK_PROCESSING_PLACEHOLDER_TEXT,
+      }),
+      signal: AbortSignal.timeout(SLACK_FAST_PATH_PROCESSING_MESSAGE_TIMEOUT_MS),
+    });
+    if (!resp.ok) {
+      logWarn("channels.slack_fast_path_processing_placeholder_failed", withOperationContext(input.op, {
+        channel: input.channel,
+        threadRoot: input.threadRoot,
+        requestId: input.requestId,
+        status: resp.status,
+      }));
+      return null;
+    }
+
+    const body = await resp.json().catch(() => null) as { ok?: boolean; ts?: string; error?: string } | null;
+    if (body?.ok !== true || typeof body.ts !== "string" || body.ts.length === 0) {
+      logWarn("channels.slack_fast_path_processing_placeholder_failed", withOperationContext(input.op, {
+        channel: input.channel,
+        threadRoot: input.threadRoot,
+        requestId: input.requestId,
+        status: resp.status,
+        slackError: typeof body?.error === "string" ? body.error : null,
+      }));
+      return null;
+    }
+
+    await store.setValue(pendingKey, [body.ts], PENDING_BOOT_MESSAGE_TTL_SECONDS);
+    logInfo("channels.slack_fast_path_processing_placeholder_sent", withOperationContext(input.op, {
+      channel: input.channel,
+      threadRoot: input.threadRoot,
+      placeholderTs: body.ts,
+      requestId: input.requestId,
+    }));
+    return body.ts;
+  } catch (error) {
+    logWarn("channels.slack_fast_path_processing_placeholder_failed", withOperationContext(input.op, {
+      channel: input.channel,
+      threadRoot: input.threadRoot,
+      requestId: input.requestId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return null;
+  } finally {
+    if (lockToken) {
+      await store.releaseLock(pendingLockKey, lockToken).catch(() => {});
+    }
+  }
 }
 
 function extractSlackDedupId(payload: unknown): string | null {
@@ -475,6 +570,14 @@ export async function POST(request: Request): Promise<Response> {
           markerFound: readiness.markerFound,
           ...eventInfo,
         }));
+
+        await sendSlackFastPathProcessingPlaceholder({
+          botToken: config.botToken,
+          channel: eventInfo.channel,
+          threadRoot: eventInfo.threadTs ?? eventInfo.ts,
+          requestId: requestId ?? null,
+          op,
+        });
 
         logInfo("channels.slack_fast_path_forwarding", withOperationContext(op, {
           sandboxId: effectiveMeta.sandboxId,

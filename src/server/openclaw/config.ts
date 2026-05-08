@@ -3509,6 +3509,11 @@ openclaw cron add --name "deploy-check" --at "+20m" --message "Check the deploy 
 openclaw cron add --name "heartbeat" --every 5m --message "Quick status check." --announce --channel telegram --session isolated
 \\\`\\\`\\\`
 
+### Send to the current Slack channel
+\\\`\\\`\\\`bash
+openclaw cron add --name "channel-joke" --every 5m --message "Generate a short, clean joke for the configured Slack channel. Do not DM anyone or ask for Slack user IDs; the cron runner will post this to the configured channel." --announce --channel slack --to "channel:C1234567890" --session isolated
+\\\`\\\`\\\`
+
 ## Key flags
 
 | Flag | Description |
@@ -3520,6 +3525,7 @@ openclaw cron add --name "heartbeat" --every 5m --message "Quick status check." 
 | \\\`--message <text>\\\` | What the agent should do when the job fires |
 | \\\`--announce\\\` | Deliver the result to a chat channel |
 | \\\`--channel <ch>\\\` | Which channel to deliver to (\\\`telegram\\\`, \\\`slack\\\`, \\\`discord\\\`) |
+| \\\`--to <target>\\\` | Explicit delivery target for the channel, such as \\\`channel:C1234567890\\\` or \\\`user:U1234567890\\\` |
 | \\\`--session isolated\\\` | Run in an isolated session (recommended) |
 | \\\`--json\\\` | Output result as JSON |
 
@@ -3539,7 +3545,10 @@ openclaw cron status                  # Scheduler status
 ## Important notes
 
 - The \\\`--announce\\\` flag is required for the job to deliver results to a chat.
-- Without \\\`--channel\\\`, delivery goes to the last active channel.
+- Always set \\\`--channel\\\` for announced scheduled delivery; do not depend on conversation history.
+- For Slack scheduled delivery, always set \\\`--to\\\` explicitly. Use \\\`channel:<id>\\\` for channel delivery and \\\`user:<id>\\\` only when the user explicitly asks for a DM.
+- For requests like "send here" or "the current Slack channel", bind \\\`--to\\\` to the current Slack channel as \\\`channel:<id>\\\`. Do not ask for a Slack user ID for current-channel delivery.
+- The scheduled prompt should ask the agent to produce content only. The cron runner owns final Slack delivery, so do not tell the agent to DM or resolve a person by name.
 - Jobs survive sandbox restarts via snapshot persistence.
 - The host watchdog checks every 5 minutes and wakes the sandbox if a job is due.
 - Minimum interval for \\\`--every\\\` is 1 minute.

@@ -32,7 +32,8 @@ import {
   buildReasoningSkill,
   buildReasoningScript,
   buildCompareSkill,
-	buildCompareScript,
+  buildCompareScript,
+  buildCronSkill,
   buildImageGenScript,
   OPENCLAW_BUNDLE_PATH,
   OPENCLAW_BUNDLED_PLUGINS_DIR_PATH,
@@ -154,6 +155,17 @@ test("buildGatewayConfig throws for invalid boolean env values", () => {
       );
     },
   );
+});
+
+test("buildCronSkill documents explicit Slack targets", () => {
+  const skill = buildCronSkill();
+
+  assert.match(skill, /--channel slack --to "channel:C1234567890"/);
+  assert.match(skill, /Use \\`channel:<id>\\` for channel delivery/);
+  assert.match(skill, /\\`user:<id>\\` only when the user explicitly asks for a DM/);
+  assert.match(skill, /Do not ask for a Slack user ID for current-channel delivery/);
+  assert.match(skill, /produce content only/);
+  assert.doesNotMatch(skill, /Without \\`--channel\\`, delivery goes to the last active channel/);
 });
 
 // ---------------------------------------------------------------------------

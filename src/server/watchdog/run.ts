@@ -11,6 +11,7 @@ import { getPublicOrigin } from "@/server/public-url";
 import {
   CRON_NEXT_WAKE_KEY,
   ensureSandboxReady,
+  ensureUsableAiGatewayCredential,
   isBusyStatus,
   prepareHotSpareFromPreparedRestore,
   prepareRestoreTarget,
@@ -20,6 +21,7 @@ import {
   type PrepareHotSpareResult,
   type ProbeResult,
   type SandboxHealthResult,
+  type TokenRefreshResult,
 } from "@/server/sandbox/lifecycle";
 import {
   runRestoreOracleCycle,
@@ -62,6 +64,10 @@ export type WatchdogDeps = {
   writeReport: (report: WatchdogReport) => Promise<WatchdogReport>;
   getCronNextWakeMs: () => Promise<number | null>;
   clearCronNextWake: () => Promise<void>;
+  refreshGatewayToken: (input: {
+    force?: boolean;
+    reason: string;
+  }) => Promise<TokenRefreshResult>;
   runRestoreOracle: (input: {
     origin: string;
     reason: string;
@@ -93,6 +99,11 @@ const defaultDeps: WatchdogDeps = {
   writeReport: writeWatchdogReport,
   getCronNextWakeMs: () => getStore().getValue<number>(CRON_NEXT_WAKE_KEY()),
   clearCronNextWake: () => getStore().deleteValue(CRON_NEXT_WAKE_KEY()),
+  refreshGatewayToken: (input) =>
+    ensureUsableAiGatewayCredential({
+      force: input.force,
+      reason: input.reason,
+    }),
   runRestoreOracle: (input) =>
     runRestoreOracleCycle(input, {
       getMeta: getInitializedMeta,
@@ -130,6 +141,40 @@ export async function runSandboxWatchdog(
     checks.push(check);
   };
 
+  const refreshGatewayTokenForWatchdog = async (input: {
+    force?: boolean;
+    reason: string;
+    message: string;
+  }): Promise<TokenRefreshResult> => {
+    const refreshStartedAt = deps.now();
+    const result = await deps.refreshGatewayToken({
+      force: input.force,
+      reason: input.reason,
+    });
+    const failed = result.reason.startsWith("refresh-failed:") ||
+      result.reason === "no-credential-available";
+    addCheck(
+      "token.refresh",
+      failed ? "fail" : "pass",
+      refreshStartedAt,
+      failed ? `AI Gateway token refresh failed: ${result.reason}` : input.message,
+      {
+        refreshed: result.refreshed,
+        reason: result.reason,
+        force: input.force === true,
+        retryAfterMs: result.retryAfterMs,
+        source: result.credential?.source ?? null,
+        expiresAt: result.credential?.expiresAt ?? null,
+      },
+    );
+    if (failed) {
+      tokenRefreshFailed = true;
+      lastError = `AI Gateway token refresh failed: ${result.reason}`;
+      status = "failed";
+    }
+    return result;
+  };
+
   let previous: WatchdogReport = {
     deploymentId,
     ranAt: null,
@@ -144,6 +189,7 @@ export async function runSandboxWatchdog(
   let status: WatchdogReport["status"] = "idle";
   let triggeredRepair = false;
   let lastError: string | null = null;
+  let tokenRefreshFailed = false;
 
   try {
     previous = await deps.readPrevious();
@@ -247,6 +293,16 @@ export async function runSandboxWatchdog(
         addCheck("probe", "pass", probeStartedAt, "Gateway probe returned the openclaw-app marker.");
         addCheck("reconcile", "skip", deps.now(), "Probe passed; no repair scheduled.");
 
+        const cronNextWakeMs = await deps.getCronNextWakeMs();
+        const cronDueOrSoon = typeof cronNextWakeMs === "number" && cronNextWakeMs <= deps.now() + 60_000;
+        await refreshGatewayTokenForWatchdog({
+          force: cronDueOrSoon,
+          reason: cronDueOrSoon ? "watchdog:cron-due-or-soon" : "watchdog:healthy-running",
+          message: cronDueOrSoon
+            ? "AI Gateway token refreshed for due sandbox cron."
+            : "AI Gateway token is usable for running sandbox.",
+        });
+
         // Restore oracle: attempt to seal a fresh restore target when idle
         const restorePrepareStartedAt = deps.now();
         try {
@@ -305,7 +361,7 @@ export async function runSandboxWatchdog(
                 ? "Restore target already reusable."
                 : `Skipped: ${oracle.blockedReason ?? "unknown"}.`;
             addCheck("restore.prepare", "skip", restorePrepareStartedAt, message, oracleData);
-            status = failingRequirementIds.length > 0 ? "failed" : "ok";
+            status = tokenRefreshFailed || failingRequirementIds.length > 0 ? "failed" : "ok";
           }
         } catch (oracleError) {
           const errMsg = oracleError instanceof Error ? oracleError.message : String(oracleError);
@@ -366,6 +422,11 @@ export async function runSandboxWatchdog(
         try {
           const origin = getPublicOrigin(options.request);
           const wakeMeta = await deps.ensureReady({ origin, reason: "watchdog:cron-wake" });
+          await refreshGatewayTokenForWatchdog({
+            force: true,
+            reason: "watchdog:cron-wake",
+            message: "AI Gateway token refreshed after cron wake.",
+          });
 
           const cronRestoreOutcome = wakeMeta.lastRestoreMetrics?.cronRestoreOutcome;
           const shouldClearWakeKey =

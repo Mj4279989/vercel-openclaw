@@ -1,6 +1,12 @@
 import type { SingleMeta } from "@/shared/types";
 
-export type WatchdogCheckId = "contract" | "probe" | "reconcile" | "cron.wake" | "restore.prepare";
+export type WatchdogCheckId =
+  | "contract"
+  | "probe"
+  | "reconcile"
+  | "token.refresh"
+  | "cron.wake"
+  | "restore.prepare";
 export type WatchdogCheckStatus = "pass" | "fail" | "skip";
 export type WatchdogStatus = "idle" | "ok" | "repairing" | "failed";
 

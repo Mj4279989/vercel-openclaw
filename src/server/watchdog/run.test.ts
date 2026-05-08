@@ -5,7 +5,7 @@ import type { RestoreOracleCycleResult } from "@/server/sandbox/restore-oracle";
 import type { RestoreDecision } from "@/shared/restore-decision";
 import type { SingleMeta } from "@/shared/types";
 import type { WatchdogReport } from "@/shared/watchdog";
-import { runSandboxWatchdog } from "@/server/watchdog/run";
+import { runSandboxWatchdog, type WatchdogDeps } from "@/server/watchdog/run";
 
 function stubDecision(overrides: Partial<RestoreDecision> = {}): RestoreDecision {
   return {
@@ -57,7 +57,7 @@ function findCheck(report: WatchdogReport, id: WatchdogReport["checks"][number][
   return report.checks.find((check) => check.id === id);
 }
 
-function makeDeps(overrides: Partial<Parameters<typeof runSandboxWatchdog>[1]> = {}) {
+function makeDeps(overrides: Partial<WatchdogDeps> = {}): WatchdogDeps {
   return {
     buildContract: async () => ({
       ok: true,
@@ -83,6 +83,11 @@ function makeDeps(overrides: Partial<Parameters<typeof runSandboxWatchdog>[1]> =
     writeReport: async (next: WatchdogReport) => next,
     getCronNextWakeMs: async () => null as number | null,
     clearCronNextWake: async () => {},
+    refreshGatewayToken: async () => ({
+      refreshed: false,
+      reason: "meta-ttl-sufficient",
+      credential: { token: "redacted", source: "oidc", expiresAt: 1778250156 },
+    }),
     runRestoreOracle: async () => oracleResult({
       executed: false,
       blockedReason: "already-ready",
@@ -116,6 +121,98 @@ test("running sandbox with healthy probe reports ok", async () => {
   assert.equal(report.triggeredRepair, false);
   assert.equal(report.consecutiveFailures, 0);
   assert.equal(findCheck(report, "cron.wake")?.status, "skip");
+});
+
+test("running sandbox with healthy probe refreshes AI Gateway token", async () => {
+  const calls: Array<{ force?: boolean; reason: string }> = [];
+
+  const report = await runSandboxWatchdog(
+    { request: new Request("https://app.test/api/cron/watchdog") },
+    makeDeps({
+      refreshGatewayToken: async (input) => {
+        calls.push(input);
+        return { refreshed: false, reason: "meta-ttl-sufficient" };
+      },
+    }),
+  );
+
+  assert.equal(report.status, "ok");
+  assert.deepEqual(calls, [{ force: false, reason: "watchdog:healthy-running" }]);
+  assert.equal(findCheck(report, "token.refresh")?.status, "pass");
+});
+
+test("running sandbox with due cron force-refreshes token without ensureReady", async () => {
+  const calls: Array<{ force?: boolean; reason: string }> = [];
+  let ensureCalled = false;
+
+  const report = await runSandboxWatchdog(
+    { request: new Request("https://app.test/api/cron/watchdog") },
+    makeDeps({
+      getCronNextWakeMs: async () => 1,
+      ensureReady: async () => {
+        ensureCalled = true;
+        return { status: "running" } as SingleMeta;
+      },
+      refreshGatewayToken: async (input) => {
+        calls.push(input);
+        return { refreshed: true, reason: "refreshed" };
+      },
+    }),
+  );
+
+  assert.equal(report.status, "ok");
+  assert.equal(ensureCalled, false);
+  assert.deepEqual(calls, [{ force: true, reason: "watchdog:cron-due-or-soon" }]);
+  assert.equal(findCheck(report, "token.refresh")?.status, "pass");
+});
+
+test("watchdog reports token refresh failure", async () => {
+  const report = await runSandboxWatchdog(
+    { request: new Request("https://app.test/api/cron/watchdog") },
+    makeDeps({
+      refreshGatewayToken: async () => ({
+        refreshed: false,
+        reason: "refresh-failed: expired oidc token",
+        retryAfterMs: 30_000,
+      }),
+    }),
+  );
+
+  assert.equal(report.status, "failed");
+  assert.equal(report.lastError, "AI Gateway token refresh failed: refresh-failed: expired oidc token");
+  const check = findCheck(report, "token.refresh");
+  assert.equal(check?.status, "fail");
+  assert.equal(check?.data?.retryAfterMs, 30_000);
+});
+
+test("stopped cron wake force-refreshes token after ensureReady", async () => {
+  const calls: Array<{ force?: boolean; reason: string }> = [];
+  let ensureCalled = false;
+
+  const report = await runSandboxWatchdog(
+    { request: new Request("https://app.test/api/cron/watchdog") },
+    makeDeps({
+      getMeta: async () =>
+        ({ status: "stopped", sandboxId: null, snapshotId: "snap_123" }) as SingleMeta,
+      getCronNextWakeMs: async () => 1,
+      ensureReady: async () => {
+        ensureCalled = true;
+        return {
+          status: "running",
+          lastRestoreMetrics: { cronRestoreOutcome: "already-present" },
+        } as SingleMeta;
+      },
+      refreshGatewayToken: async (input) => {
+        calls.push(input);
+        return { refreshed: true, reason: "refreshed" };
+      },
+    }),
+  );
+
+  assert.equal(ensureCalled, true);
+  assert.equal(report.status, "repairing");
+  assert.deepEqual(calls, [{ force: true, reason: "watchdog:cron-wake" }]);
+  assert.equal(findCheck(report, "token.refresh")?.status, "pass");
 });
 
 test("running sandbox with failed probe schedules repair", async () => {

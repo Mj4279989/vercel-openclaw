@@ -37,6 +37,7 @@ import type { StoredCronRecord } from "@/shared/types";
 // ---------------------------------------------------------------------------
 
 const CRON_JOBS_PATH = "/home/vercel-sandbox/.openclaw/cron/jobs.json";
+const CRON_JOBS_STATE_PATH = "/home/vercel-sandbox/.openclaw/cron/jobs-state.json";
 
 function buildTestCronJobs(nextRunAtMs: number) {
   return JSON.stringify({
@@ -324,6 +325,169 @@ test("cron-persistence: heartbeat persists jobs to store", async (t) => {
     assert.equal(record.source, "heartbeat");
     assert.equal(record.jobCount, 2, "Both jobs should be persisted via heartbeat");
     assert.ok(record.sha256, "Should have a SHA-256 hash");
+  } catch (err) {
+    await dumpDiagnostics(t, h);
+    throw err;
+  } finally {
+    h.teardown();
+  }
+});
+
+test("cron-persistence: heartbeat merges split cron state", async (t) => {
+  const h = createScenarioHarness();
+
+  try {
+    await h.driveToRunning();
+
+    const nextRunAtMs = Date.now() + 600_000;
+    const handle = h.controller.lastCreated()!;
+    await handle.writeFiles([
+      {
+        path: CRON_JOBS_PATH,
+        content: Buffer.from(JSON.stringify({
+          version: 1,
+          jobs: [{
+            id: "split-state-job",
+            name: "split-state-job",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 300_000, anchorMs: Date.now() },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Tell a joke." },
+            delivery: { mode: "announce", channel: "slack", to: "U123" },
+            state: {},
+          }],
+        })),
+      },
+      {
+        path: CRON_JOBS_STATE_PATH,
+        content: Buffer.from(JSON.stringify({
+          version: 1,
+          jobs: {
+            "split-state-job": {
+              state: { nextRunAtMs },
+            },
+          },
+        })),
+      },
+    ]);
+
+    const { mutateMeta } = await import("@/server/store/store");
+    await mutateMeta((m) => { m.lastAccessedAt = Date.now() - 600_000; });
+
+    const { touchRunningSandbox } = await import("@/server/sandbox/lifecycle");
+    await touchRunningSandbox();
+
+    const wakeMs = await getStore().getValue<number>(CRON_NEXT_WAKE_KEY());
+    assert.equal(wakeMs, nextRunAtMs, "Wake time should come from jobs-state.json");
+
+    const record = await getStore().getValue<StoredCronRecord>(CRON_JOBS_KEY());
+    assert.ok(record, "Merged cron record should be persisted");
+    assert.equal(record.jobCount, 1);
+    const persisted = JSON.parse(record.jobsJson);
+    assert.equal(persisted.jobs[0].state.nextRunAtMs, nextRunAtMs);
+  } catch (err) {
+    await dumpDiagnostics(t, h);
+    throw err;
+  } finally {
+    h.teardown();
+  }
+});
+
+test("cron-persistence: heartbeat merges direct split cron state", async (t) => {
+  const h = createScenarioHarness();
+
+  try {
+    await h.driveToRunning();
+
+    const nextRunAtMs = Date.now() + 600_000;
+    const handle = h.controller.lastCreated()!;
+    await handle.writeFiles([
+      {
+        path: CRON_JOBS_PATH,
+        content: Buffer.from(JSON.stringify({
+          version: 1,
+          jobs: [{
+            id: "split-state-job",
+            name: "split-state-job",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 300_000, anchorMs: Date.now() },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Tell a joke." },
+            delivery: { mode: "announce", channel: "slack", to: "U123" },
+            state: {},
+          }],
+        })),
+      },
+      {
+        path: CRON_JOBS_STATE_PATH,
+        content: Buffer.from(JSON.stringify({
+          version: 1,
+          jobs: {
+            "split-state-job": {
+              nextRunAtMs,
+              lastRunStatus: "ok",
+              lastDeliveryStatus: "delivered",
+            },
+          },
+        })),
+      },
+    ]);
+
+    const { mutateMeta } = await import("@/server/store/store");
+    await mutateMeta((m) => { m.lastAccessedAt = Date.now() - 600_000; });
+
+    const { touchRunningSandbox } = await import("@/server/sandbox/lifecycle");
+    await touchRunningSandbox();
+
+    const wakeMs = await getStore().getValue<number>(CRON_NEXT_WAKE_KEY());
+    assert.equal(wakeMs, nextRunAtMs, "Wake time should come from direct jobs-state fields");
+
+    const record = await getStore().getValue<StoredCronRecord>(CRON_JOBS_KEY());
+    assert.ok(record, "Merged cron record should be persisted");
+    const persisted = JSON.parse(record.jobsJson);
+    assert.equal(persisted.jobs[0].state.nextRunAtMs, nextRunAtMs);
+    assert.equal(persisted.jobs[0].state.lastDeliveryStatus, "delivered");
+  } catch (err) {
+    await dumpDiagnostics(t, h);
+    throw err;
+  } finally {
+    h.teardown();
+  }
+});
+
+test("cron-persistence: malformed jobs-state falls back to jobs.json", async (t) => {
+  const h = createScenarioHarness();
+
+  try {
+    await h.driveToRunning();
+
+    const nextRunAtMs = Date.now() + 600_000;
+    const handle = h.controller.lastCreated()!;
+    await handle.writeFiles([
+      {
+        path: CRON_JOBS_PATH,
+        content: Buffer.from(buildTestCronJobs(nextRunAtMs)),
+      },
+      {
+        path: CRON_JOBS_STATE_PATH,
+        content: Buffer.from('{"version":1,"jobs":'),
+      },
+    ]);
+
+    const { mutateMeta } = await import("@/server/store/store");
+    await mutateMeta((m) => { m.lastAccessedAt = Date.now() - 600_000; });
+
+    const { touchRunningSandbox } = await import("@/server/sandbox/lifecycle");
+    await touchRunningSandbox();
+
+    const wakeMs = await getStore().getValue<number>(CRON_NEXT_WAKE_KEY());
+    assert.equal(wakeMs, nextRunAtMs, "Malformed jobs-state must not block valid jobs.json wake time");
+
+    const record = await getStore().getValue<StoredCronRecord>(CRON_JOBS_KEY());
+    assert.ok(record, "Valid jobs.json should still persist when jobs-state is malformed");
+    assert.equal(record.jobCount, 2);
   } catch (err) {
     await dumpDiagnostics(t, h);
     throw err;

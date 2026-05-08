@@ -103,7 +103,63 @@ export function CRON_JOBS_KEY(): string {
   return cronJobsKey();
 }
 const CRON_JOBS_PATH = `${OPENCLAW_STATE_DIR}/cron/jobs.json`;
+const CRON_JOBS_STATE_PATH = `${OPENCLAW_STATE_DIR}/cron/jobs-state.json`;
 const CRON_JOBS_MAX_BYTES = 256 * 1024; // 256 KB size cap for store value
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractCronRuntimeState(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  if (isRecord(value.state)) return value.state;
+
+  const runtimeKeys = new Set([
+    "nextRunAtMs",
+    "lastRunAtMs",
+    "lastRunStatus",
+    "lastStatus",
+    "lastDeliveryStatus",
+    "lastDelivered",
+    "consecutiveErrors",
+  ]);
+  const entries = Object.entries(value).filter(([key]) => runtimeKeys.has(key));
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
+function mergeCronRuntimeState(rawJobsJson: string, rawStateJson: string | null): string {
+  if (!rawStateJson) return rawJobsJson;
+
+  const jobsPayload = JSON.parse(rawJobsJson) as {
+    jobs?: Array<{ id?: string; state?: Record<string, unknown> }>;
+  };
+
+  let statePayload: { jobs?: Record<string, unknown> };
+  try {
+    statePayload = JSON.parse(rawStateJson) as { jobs?: Record<string, unknown> };
+  } catch (error) {
+    logWarn("sandbox.cron_state_merge_skipped", {
+      reason: "invalid-jobs-state-json",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return rawJobsJson;
+  }
+
+  if (!Array.isArray(jobsPayload.jobs) || !isRecord(statePayload.jobs)) {
+    return rawJobsJson;
+  }
+
+  let changed = false;
+  for (const job of jobsPayload.jobs) {
+    if (!job.id) continue;
+    const state = extractCronRuntimeState(statePayload.jobs[job.id]);
+    if (!state || Object.keys(state).length === 0) continue;
+    job.state = { ...(job.state ?? {}), ...state };
+    changed = true;
+  }
+
+  return changed ? JSON.stringify(jobsPayload) : rawJobsJson;
+}
 
 /** Build a structured cron record from raw jobs JSON. Returns null if invalid. */
 function buildCronRecord(
@@ -829,7 +885,17 @@ async function readCronNextWakeFromSandbox(
     if (!buf) {
       return { status: "no-jobs" };
     }
-    const raw = buf.toString("utf8");
+    const rawJobs = buf.toString("utf8");
+    let rawState: string | null = null;
+    try {
+      const stateBuf = await sandbox.readFileToBuffer({ path: CRON_JOBS_STATE_PATH });
+      rawState = stateBuf?.toString("utf8") ?? null;
+    } catch (error) {
+      logWarn("sandbox.cron_state_read_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const raw = mergeCronRuntimeState(rawJobs, rawState);
     const data = JSON.parse(raw) as {
       jobs?: Array<{
         enabled?: boolean;

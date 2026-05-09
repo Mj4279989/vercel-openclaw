@@ -1,6 +1,6 @@
 # Sandbox Lifecycle and Restore
 
-The project uses `@vercel/sandbox@^2.0.0-beta` with persistent sandboxes. Sandboxes auto-snapshot on stop and auto-resume on get. There is no manual `snapshot()` call.
+The project uses `@vercel/sandbox@^2.0.0-beta` with one named persistent OpenClaw sandbox. The normal lifecycle relies on Sandbox v2 persistent auto-save on stop and explicit resume by name; manual `snapshot()` calls are reserved for diagnostic/checkpoint flows.
 
 ## Lifecycle states
 
@@ -13,7 +13,7 @@ The sandbox moves through these states:
 | `setup` | Bootstrap is writing config files and installing OpenClaw |
 | `booting` | The gateway is starting up |
 | `running` | The sandbox is healthy and serving requests |
-| `stopped` | The sandbox was stopped (v2 auto-snapshots on stop, preserves sandboxId for resume) |
+| `stopped` | The persistent sandbox was stopped; Sandbox v2 auto-saved state and the stable name can be resumed |
 | `error` | Something went wrong; may be recoverable |
 
 ## What "ensure running" does
@@ -21,16 +21,19 @@ The sandbox moves through these states:
 Calling ensure does not always mean "create from scratch." The app picks the cheapest path:
 
 - If no sandbox exists yet, it creates one from scratch with `{ name: "oc-xxx", persistent: true }` (full bootstrap).
-- If the sandbox is stopped, it resumes by calling `Sandbox.create()` with the same name. The v2 SDK handles 400/409 name-conflict by falling back to `get()` for auto-resume.
+- If the persistent sandbox exists, it first tries `Sandbox.get({ name, resume: true })` through the local controller. That is the normal wake/resume path.
+- If `get({ resume: true })` fails or the handle is unhealthy, it falls back to `Sandbox.create({ name, persistent: true, ... })`. A name-conflict create falls back to `get({ resume: true })` again.
 - If the sandbox is already running and healthy, it does nothing.
 
 The work is scheduled with `after()` so the API responds immediately with a waiting state. The browser polls until the sandbox is ready.
 
 ## What stop and snapshot mean today
 
-Today, stopping and snapshotting both use the same flow: stop the sandbox. The v2 SDK automatically takes a snapshot on stop. There is no separate manual snapshot step. If that changes in the future, this page and the API reference should be updated together.
+For the main OpenClaw sandbox, stopping means `sandbox.stop({ blocking: false })` on a persistent sandbox. Vercel Sandbox v2 auto-saves persistent state during stop; the app does not need a manual snapshot ID for normal resume.
 
-The stop path parks metadata in `snapshotting` before calling `sandbox.stop({ blocking: false })`. That ordering closes the race where a concurrent heartbeat still sees `running`, calls the SDK default get path, and resumes the sandbox while the stop request is being accepted. While metadata is `snapshotting`, status reconciliation must inspect the sandbox with `Sandbox.get({ resume: false })`. The SDK resumes stopped/snapshotting sandboxes by default, so a status poll that omits `resume: false` can restart the sandbox it is trying to observe and make the UI wait until the stale guardrail fires.
+Manual `snapshot()` remains available only for explicit/debug checkpoint APIs. A manual snapshot shuts the sandbox down, so those paths must not call `stop()` afterward.
+
+The stop path parks metadata in `snapshotting` before calling `sandbox.stop({ blocking: false })`. That ordering closes the race where a concurrent heartbeat still sees `running` and resumes the sandbox while the stop request is being accepted. While metadata is `snapshotting`, status reconciliation must inspect the sandbox with `Sandbox.get({ resume: false })`; observation must not wake the sandbox being observed. Normal wake uses `Sandbox.get({ resume: true })`.
 
 ### Measuring snapshot duration
 
@@ -81,11 +84,9 @@ These are files that change with runtime configuration, primarily `openclaw.json
 
 ### Credential brokering
 
-The AI Gateway API key is not written as a file or env var inside the sandbox. Instead, it is injected at the firewall layer via network policy `transform` rules that add an `Authorization: Bearer <token>` header to outbound requests to `ai-gateway.vercel.sh`. This means:
+The preferred AI Gateway credential path is host-controlled network policy `transform` rules that add an `Authorization: Bearer <token>` header to outbound requests to `ai-gateway.vercel.sh`. Token refresh updates the network policy with `sandbox.update({ networkPolicy })`; it does not rewrite files or restart the gateway.
 
-- Token refresh updates the network policy — no file writes or gateway restarts
-- The sandbox has `OPENAI_BASE_URL` set so code knows where to call, but the auth header is injected transparently
-- Prompt injection attacks cannot exfiltrate the credential because it never exists inside the VM
+Current bootstrap still has a compatibility exception: `buildRuntimeEnv()` may pass `AI_GATEWAY_API_KEY`/`OPENAI_API_KEY` into sandbox creation env when a token is available, while also setting `OPENAI_BASE_URL` for AI Gateway. Treat the network policy as the enforcement boundary, but do not claim the credential never exists inside the VM until that env fallback is removed.
 
 ### Readiness checks
 
@@ -110,7 +111,7 @@ The watchdog never runs chat completions, delivers messages, or interacts with c
 
 ## Resume-prepared state
 
-A sandbox can be "running" right now but still not be a good future resume target. The app tracks this separately. With v2 persistent sandboxes, the auto-snapshot is always available, but its config may not match the current deployment.
+A sandbox can be "running" right now but still not be a good future resume target. The app tracks this separately. With v2 persistent sandboxes, the saved state is keyed by the persistent sandbox name, but its config/assets may not match the current deployment.
 
 ### Statuses
 
@@ -126,7 +127,9 @@ A sandbox can be "running" right now but still not be a good future resume targe
 
 Common reasons for the current status:
 
-- `snapshot-missing` — there is no saved state to evaluate
+- `persisted-state-missing` — there is no saved persistent state to evaluate
+- `persisted-state-config-stale` — saved dynamic config does not match the desired config
+- `persisted-state-assets-stale` — saved static assets do not match the desired app version
 - `dynamic-config-changed` — runtime config has drifted since the sandbox was last stopped
 - `static-assets-changed` — app version changed and static assets no longer match
 - `deployment-changed` — the deployment itself has changed
@@ -139,9 +142,11 @@ Common reasons for the current status:
 {
   "restorePreparedStatus": "ready",
   "restorePreparedReason": "prepared",
-  "snapshotDynamicConfigHash": "abc123",
+  "persistedStateDynamicConfigHash": "abc123",
+  "persistedStateAssetSha256": "def456",
+  "persistedStateSavedAt": 1778269200000,
+  "persistedStateSource": "persistent-auto-save",
   "runtimeDynamicConfigHash": "abc123",
-  "snapshotAssetSha256": "def456",
   "runtimeAssetSha256": "def456"
 }
 ```

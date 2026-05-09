@@ -343,6 +343,7 @@ export class FakeSandboxController implements SandboxController {
   created: FakeSandboxHandle[] = [];
   retrieved: string[] = [];
   getCalls: Array<{ sandboxId: string; resume?: boolean }> = [];
+  createCalls: CreateParams[] = [];
   handlesByIds = new Map<string, FakeSandboxHandle>();
 
   /** Ordered event log shared across all handles. */
@@ -379,6 +380,7 @@ export class FakeSandboxController implements SandboxController {
     if (this.delay > 0) {
       await sleep(this.delay);
     }
+    this.createCalls.push(params);
     this.counter += 1;
     const id = `sbx-fake-${this.counter}`;
     const isRestore = params.source?.type === "snapshot";

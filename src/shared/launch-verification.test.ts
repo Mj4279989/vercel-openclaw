@@ -14,6 +14,10 @@ function makeAttestation(
   return {
     desiredDynamicConfigHash: "desired-config",
     desiredAssetSha256: "desired-assets",
+    persistedStateDynamicConfigHash: "snapshot-config",
+    persistedStateAssetSha256: "snapshot-assets",
+    persistedStateSavedAt: null,
+    persistedStateSource: "persistent-auto-save",
     snapshotDynamicConfigHash: "snapshot-config",
     runtimeDynamicConfigHash: "runtime-config",
     snapshotAssetSha256: "snapshot-assets",
@@ -22,8 +26,10 @@ function makeAttestation(
     restorePreparedReason: "dynamic-config-changed",
     restorePreparedAt: null,
     runtimeConfigFresh: false,
+    persistedStateConfigFresh: false,
     snapshotConfigFresh: false,
     runtimeAssetsFresh: false,
+    persistedStateAssetsFresh: false,
     snapshotAssetsFresh: false,
     reusable: false,
     needsPrepare: true,
@@ -48,7 +54,7 @@ function makePlan(overrides: Partial<RestoreTargetPlan> = {}): RestoreTargetPlan
         id: "prepare-destructive",
         priority: "required",
         title: "Prepare a fresh restore target",
-        description: "The current snapshot cannot be reused: restore-target-dirty.",
+        description: "The current persisted restore target cannot be reused: restore-target-dirty.",
         request: {
           method: "POST",
           path: "/api/admin/prepare-restore",
@@ -117,7 +123,7 @@ describe("resolveRestorePreparedPhase", () => {
       {
         ok: true,
         code: "prepared",
-        message: "Prepared fresh restore target snap_123.",
+        message: "Prepared fresh restore target from manual snapshot snap_123.",
       },
     );
   });
@@ -142,7 +148,7 @@ describe("resolveRestorePreparedPhase", () => {
     });
 
     assert.equal(result.code, "prepared");
-    assert.equal(result.message, "Prepared fresh restore target.");
+    assert.equal(result.message, "Prepared fresh persistent restore target.");
   });
 
   test("returns not-reusable-after-prepare when final attestation is still not reusable and prepare succeeded", () => {

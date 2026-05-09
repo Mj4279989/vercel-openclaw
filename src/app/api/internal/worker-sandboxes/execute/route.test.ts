@@ -183,6 +183,8 @@ test("worker-sandbox execute creates sandbox, runs command, stops sandbox", asyn
     // Verify sandbox was created and stopped
     const createEvents = h.controller.eventsOfKind("create");
     assert.equal(createEvents.length, 1, "Should have created exactly one sandbox");
+    assert.equal(h.controller.createCalls.length, 1);
+    assert.equal(h.controller.createCalls[0]!.persistent, false);
 
     const stopEvents = h.controller.eventsOfKind("stop");
     assert.equal(stopEvents.length, 1, "Should have stopped the sandbox");

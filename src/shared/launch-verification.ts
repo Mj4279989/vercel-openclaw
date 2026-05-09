@@ -9,6 +9,10 @@ import type { RestorePreparedStatus, RestorePreparedReason } from "@/shared/type
 export type RestoreTargetAttestation = {
   desiredDynamicConfigHash: string;
   desiredAssetSha256: string;
+  persistedStateDynamicConfigHash: string | null;
+  persistedStateAssetSha256: string | null;
+  persistedStateSavedAt: number | null;
+  persistedStateSource: "persistent-auto-save" | "manual-snapshot" | null;
   snapshotDynamicConfigHash: string | null;
   runtimeDynamicConfigHash: string | null;
   snapshotAssetSha256: string | null;
@@ -17,8 +21,10 @@ export type RestoreTargetAttestation = {
   restorePreparedReason: string | null;
   restorePreparedAt: number | null;
   runtimeConfigFresh: boolean | null;
+  persistedStateConfigFresh: boolean | null;
   snapshotConfigFresh: boolean | null;
   runtimeAssetsFresh: boolean | null;
+  persistedStateAssetsFresh: boolean | null;
   snapshotAssetsFresh: boolean | null;
   reusable: boolean;
   needsPrepare: boolean;
@@ -312,8 +318,8 @@ export function resolveRestorePreparedPhase(
       code: "prepared",
       message:
         input.prepare?.snapshotId != null
-          ? `Prepared fresh restore target ${input.prepare.snapshotId}.`
-          : "Prepared fresh restore target.",
+          ? `Prepared fresh restore target from manual snapshot ${input.prepare.snapshotId}.`
+          : "Prepared fresh persistent restore target.",
     };
   }
 

@@ -7,6 +7,8 @@ description: "Sandbox lifecycle debugging for vercel-openclaw: create, resume, s
 
 Use this skill when the sandbox state machine is the primary suspect.
 
+For Sandbox v2 truth-model work, also load `sandbox-v2-lifecycle`. Official Vercel Sandbox v2 docs override older repo guidance that treats manual snapshots as the normal restore source.
+
 ## Start Here
 
 Read `lat.md/sandbox-lifecycle.md` sections `Status State Machine`, `Triggers -- What Causes State Transitions`, and the specific trigger involved. Run `lat locate "Sandbox Lifecycle"` or `lat search "sandbox lifecycle <symptom>"` when unsure.
@@ -25,7 +27,8 @@ Report these separately:
 - metadata status in `SingleMeta.status`
 - Vercel Sandbox SDK status
 - gateway readiness on port 3000
-- snapshot / persistent resume target availability
+- persistent auto-saved state availability
+- manual snapshot/checkpoint availability when relevant
 - lifecycle lock and start lock state when visible
 - UI polling status
 
@@ -35,9 +38,17 @@ Do not use `running` as shorthand for gateway-ready or user-ready.
 
 - Admin ensure: `/api/admin/ensure` -> `ensureSandboxRunning()` / `ensureSandboxReady()`.
 - Gateway request: auth -> `ensureSandboxRunning()` -> token refresh -> `touchRunningSandbox()` -> proxy.
-- Stop/snapshot: `stopSandbox()` -> cleanup -> cron persistence -> `sandbox.stop({ blocking: false })` -> `snapshotting`.
+- Stop/auto-save: `stopSandbox()` -> cleanup -> cron persistence -> `sandbox.stop({ blocking: false })` -> `snapshotting` host metadata while v2 persists state.
 - Status polling: `GET /api/status` -> stale running or snapshotting reconciliation.
 - Reset: `resetSandbox()` destroys active sandbox and snapshots, clears cron and token metadata.
+
+## Sandbox v2 Rules
+
+- Main OpenClaw sandbox is one named persistent sandbox.
+- Normal resume uses the persistent name and auto-saved state, not manual `snapshotId`.
+- Observation of stopped/snapshotting state must use `resume:false`.
+- Manual `snapshot()` is explicit/debug/checkpoint only and shuts the sandbox down.
+- Worker/debug sandboxes are short-lived and must use `persistent:false`.
 
 ## Fix Boundaries
 

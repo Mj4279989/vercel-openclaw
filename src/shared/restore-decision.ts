@@ -8,6 +8,11 @@ import type {
 export type RestoreDecisionAction = "ensure-running" | "prepare-destructive";
 
 export type RestoreDecisionReason =
+  | "persisted-state-missing"
+  | "persisted-state-config-stale"
+  | "persisted-state-config-unknown"
+  | "persisted-state-assets-stale"
+  | "persisted-state-assets-unknown"
   | "snapshot-missing"
   | "runtime-config-stale"
   | "runtime-assets-stale"
@@ -42,9 +47,13 @@ export type RestoreDecision = {
   minIdleMs: number | null;
   probeReady: boolean | null;
   desiredDynamicConfigHash: string;
+  persistedStateDynamicConfigHash: string | null;
   snapshotDynamicConfigHash: string | null;
   runtimeDynamicConfigHash: string | null;
   desiredAssetSha256: string;
+  persistedStateAssetSha256: string | null;
+  persistedStateSavedAt: number | null;
+  persistedStateSource: "persistent-auto-save" | "manual-snapshot" | null;
   snapshotAssetSha256: string | null;
   runtimeAssetSha256: string | null;
 };

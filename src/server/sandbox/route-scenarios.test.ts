@@ -332,7 +332,7 @@ test("Admin: POST /api/admin/stop returns stopped state after stopping a running
     // v2 non-blocking stop returns "snapshotting" immediately; the reconciler
     // flips it to "stopped" on the next status read.
     assert.equal(body.status, "snapshotting");
-    // v2 persistent sandboxes auto-snapshot on stop — snapshotId is not set in metadata
+    // v2 persistent sandboxes auto-save on stop — snapshotId is not set in metadata
 
     // sandboxId should be preserved after stop
     const stoppedMeta = await h.getMeta();

@@ -2,6 +2,8 @@ import { jsonError, jsonOk, ApiError } from "@/shared/http";
 import { requireMutationAuth } from "@/server/auth/route-auth";
 import { requireDebugEnabled } from "@/server/auth/debug-guard";
 
+const ALLOWED_VCPUS = new Set([1, 2, 4, 8]);
+
 export async function POST(request: Request): Promise<Response> {
   const blocked = requireDebugEnabled();
   if (blocked) return blocked;
@@ -17,6 +19,11 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
   const vcpus = Number(url.searchParams.get("vcpus") ?? "1");
+  if (!Number.isInteger(vcpus) || !ALLOWED_VCPUS.has(vcpus)) {
+    return jsonError(
+      new ApiError(400, "INVALID_VCPUS", "vcpus must be one of 1, 2, 4, or 8."),
+    );
+  }
 
   const timings: Record<string, number> = {};
   const logs: string[] = [];
@@ -30,6 +37,7 @@ export async function POST(request: Request): Promise<Response> {
     const t1 = performance.now();
     sandbox = await Sandbox.create({
       source: { type: "snapshot", snapshotId },
+      persistent: false,
       ports: [3000],
       timeout: 60_000,
       resources: { vcpus },

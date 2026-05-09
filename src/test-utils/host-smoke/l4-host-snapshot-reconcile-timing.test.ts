@@ -4,7 +4,7 @@
  * Background:
  *   `reconcileSnapshottingStatus()` flips meta.status from "snapshotting" to
  *   "stopped" only on the next /api/status read AFTER the SDK confirms the
- *   auto-snapshot finished. If reconcile work becomes slow or busy-loops, the
+ *   auto-save finished. If reconcile work becomes slow or busy-loops, the
  *   UI can watch "snapshotting" forever even though the host could recover
  *   immediately. This file guards the host-side reconcile latency once the
  *   SDK reports the sandbox stopped.
@@ -79,7 +79,7 @@ test("L4-host snapshot reconcile: bounded-delay path resolves within poll cap wi
       handle.stopCalled = true;
       handle.lastStopOptions = opts;
       // Default fake flips to "stopped" immediately; override that so the
-      // SDK appears to still be finishing the auto-snapshot.
+      // SDK appears to still be finishing the auto-save.
       handle.setStatus("snapshotting");
     };
     void originalStop; // keep reference to silence unused warnings

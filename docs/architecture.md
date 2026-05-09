@@ -7,7 +7,7 @@
 It handles:
 
 - admin auth in front of the proxy
-- creating and resuming the sandbox on demand (persistent sandboxes with auto-snapshot on stop)
+- creating and resuming the sandbox on demand (Sandbox v2 persistent auto-save on stop)
 - proxying the OpenClaw UI at `/gateway`
 - injecting the gateway token into proxied HTML so WebSocket connections and auth work through the app
 - learning and enforcing egress firewall rules
@@ -28,9 +28,9 @@ The store backend is selected at startup. Redis is required for production becau
 
 ### Enforcement plane
 
-The enforcement plane is the actual Vercel Sandbox plus its network policy. The app talks to it through the `@vercel/sandbox` v2 beta SDK to create, resume, stop, and update the sandbox network policy. Sandboxes are persistent — they auto-snapshot on stop and auto-resume on get.
+The enforcement plane is the actual Vercel Sandbox plus its network policy. The app talks to it through the `@vercel/sandbox` v2 beta SDK to create, resume, stop, and update the sandbox network policy. Sandboxes are persistent: stop auto-saves state, normal wake uses `Sandbox.get({ name, resume: true })`, and observation paths use `resume: false` so status checks do not wake stopped sandboxes.
 
-The network policy also handles **credential brokering** — the AI Gateway API key is injected as an `Authorization` header via `transform` rules at the firewall layer, so the credential never enters the sandbox. This protects against prompt injection exfiltration. Token refresh is a single `sandbox.update({ networkPolicy })` call with no gateway restart.
+The network policy also handles **credential brokering**: AI Gateway tokens are injected as `Authorization` headers via `transform` rules at the firewall layer, and token refresh is a single `sandbox.update({ networkPolicy })` call with no gateway restart. Current bootstrap still has a compatibility exception where `buildRuntimeEnv()` may pass AI Gateway tokens into sandbox env, so the security model is host-controlled policy plus a documented bootstrap fallback, not a blanket claim that the credential never exists in the VM.
 
 ## Request flow to `/gateway`
 
@@ -43,7 +43,7 @@ The network policy also handles **credential brokering** — the AI Gateway API 
 ## Main subsystems
 
 - **Auth** — session cookies, admin-secret exchange, optional Vercel OAuth
-- **Sandbox lifecycle** — create, resume, stop, health checks (persistent sandboxes with auto-snapshot)
+- **Sandbox lifecycle** — create, resume, stop, health checks (Sandbox v2 persistent auto-save)
 - **Proxy** — reverse proxy to the sandbox, HTML injection, waiting page
 - **Firewall** — domain learning from shell commands, policy enforcement
 - **Channels** — Slack, Telegram, WhatsApp (experimental), and Discord (experimental) webhook ingestion, boot-message flow, durable delivery via Workflow DevKit

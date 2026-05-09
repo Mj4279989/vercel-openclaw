@@ -22,6 +22,10 @@ export type RestoreAttestationMeta = Pick<
   | "runtimeDynamicConfigHash"
   | "snapshotAssetSha256"
   | "runtimeAssetSha256"
+  | "persistedStateDynamicConfigHash"
+  | "persistedStateAssetSha256"
+  | "persistedStateSavedAt"
+  | "persistedStateSource"
   | "restorePreparedStatus"
   | "restorePreparedReason"
   | "restorePreparedAt"
@@ -54,9 +58,19 @@ export function buildRestoreTargetAttestation(
   const desiredAssetSha256 = buildRestoreAssetManifest().sha256;
   const snapshotDynamicConfigHash =
     meta.snapshotDynamicConfigHash ?? meta.snapshotConfigHash;
+  const persistedStateDynamicConfigHash =
+    meta.persistedStateDynamicConfigHash ?? snapshotDynamicConfigHash;
+  const persistedStateAssetSha256 =
+    meta.persistedStateAssetSha256 ?? meta.snapshotAssetSha256;
+  const persistedStateSavedAt = meta.persistedStateSavedAt ?? meta.restorePreparedAt ?? null;
+  const persistedStateSource =
+    meta.persistedStateSource ??
+    (persistedStateDynamicConfigHash || persistedStateAssetSha256
+      ? meta.snapshotId ? "manual-snapshot" : "persistent-auto-save"
+      : null);
 
-  const hasSnapshot =
-    typeof meta.snapshotId === "string" && meta.snapshotId.length > 0;
+  const hasPersistedState =
+    Boolean(persistedStateDynamicConfigHash || persistedStateAssetSha256);
 
   const runtimeConfigFresh = compareHash(
     meta.runtimeDynamicConfigHash,
@@ -64,6 +78,10 @@ export function buildRestoreTargetAttestation(
   );
   const snapshotConfigFresh = compareHash(
     snapshotDynamicConfigHash,
+    desiredDynamicConfigHash,
+  );
+  const persistedStateConfigFresh = compareHash(
+    persistedStateDynamicConfigHash,
     desiredDynamicConfigHash,
   );
   const runtimeAssetsFresh = compareHash(
@@ -74,19 +92,31 @@ export function buildRestoreTargetAttestation(
     meta.snapshotAssetSha256,
     desiredAssetSha256,
   );
+  const persistedStateAssetsFresh = compareHash(
+    persistedStateAssetSha256,
+    desiredAssetSha256,
+  );
 
   const reasons: string[] = [];
 
-  if (!hasSnapshot) reasons.push("snapshot-missing");
+  if (!hasPersistedState) reasons.push("persisted-state-missing");
   if (runtimeConfigFresh === false) reasons.push("runtime-config-stale");
   if (runtimeAssetsFresh === false) reasons.push("runtime-assets-stale");
 
+  if (persistedStateConfigFresh === false) reasons.push("persisted-state-config-stale");
+  else if (persistedStateConfigFresh === null)
+    reasons.push("persisted-state-config-unknown");
+
+  if (persistedStateAssetsFresh === false) reasons.push("persisted-state-assets-stale");
+  else if (persistedStateAssetsFresh === null)
+    reasons.push("persisted-state-assets-unknown");
+
   if (snapshotConfigFresh === false) reasons.push("snapshot-config-stale");
-  else if (snapshotConfigFresh === null)
+  else if (snapshotConfigFresh === null && persistedStateConfigFresh === null)
     reasons.push("snapshot-config-unknown");
 
   if (snapshotAssetsFresh === false) reasons.push("snapshot-assets-stale");
-  else if (snapshotAssetsFresh === null)
+  else if (snapshotAssetsFresh === null && persistedStateAssetsFresh === null)
     reasons.push("snapshot-assets-unknown");
 
   if (meta.restorePreparedStatus !== "ready") {
@@ -94,14 +124,18 @@ export function buildRestoreTargetAttestation(
   }
 
   const reusable =
-    hasSnapshot &&
+    hasPersistedState &&
     meta.restorePreparedStatus === "ready" &&
-    snapshotConfigFresh === true &&
-    snapshotAssetsFresh === true;
+    persistedStateConfigFresh === true &&
+    persistedStateAssetsFresh === true;
 
   return {
     desiredDynamicConfigHash,
     desiredAssetSha256,
+    persistedStateDynamicConfigHash,
+    persistedStateAssetSha256,
+    persistedStateSavedAt,
+    persistedStateSource,
     snapshotDynamicConfigHash: snapshotDynamicConfigHash ?? null,
     runtimeDynamicConfigHash: meta.runtimeDynamicConfigHash,
     snapshotAssetSha256: meta.snapshotAssetSha256,
@@ -110,8 +144,10 @@ export function buildRestoreTargetAttestation(
     restorePreparedReason: meta.restorePreparedReason ?? null,
     restorePreparedAt: meta.restorePreparedAt ?? null,
     runtimeConfigFresh,
+    persistedStateConfigFresh,
     snapshotConfigFresh,
     runtimeAssetsFresh,
+    persistedStateAssetsFresh,
     snapshotAssetsFresh,
     reusable,
     needsPrepare: !reusable,
@@ -162,7 +198,7 @@ export function buildRestoreTargetPlan(input: {
     id: "prepare-destructive",
     priority: "required",
     title: "Prepare a fresh restore target",
-    description: `The current snapshot cannot be reused: ${reasons.join(", ")}.`,
+    description: `The current persisted restore target cannot be reused: ${reasons.join(", ")}.`,
     request: {
       method: "POST",
       path: "/api/admin/prepare-restore",
@@ -252,9 +288,13 @@ export function buildRestoreDecision(input: {
     minIdleMs: input.minIdleMs ?? null,
     probeReady: input.probeReady ?? null,
     desiredDynamicConfigHash: attestation.desiredDynamicConfigHash,
+    persistedStateDynamicConfigHash: attestation.persistedStateDynamicConfigHash,
     snapshotDynamicConfigHash: attestation.snapshotDynamicConfigHash,
     runtimeDynamicConfigHash: attestation.runtimeDynamicConfigHash,
     desiredAssetSha256: attestation.desiredAssetSha256,
+    persistedStateAssetSha256: attestation.persistedStateAssetSha256,
+    persistedStateSavedAt: attestation.persistedStateSavedAt,
+    persistedStateSource: attestation.persistedStateSource,
     snapshotAssetSha256: attestation.snapshotAssetSha256,
     runtimeAssetSha256: attestation.runtimeAssetSha256,
   };

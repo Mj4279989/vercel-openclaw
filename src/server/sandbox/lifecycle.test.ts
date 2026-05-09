@@ -198,7 +198,7 @@ test("stopSandbox transitions to snapshotting and preserves sandboxId", async ()
     const result = await stopSandbox();
 
     // v2 non-blocking stop: API returns with status "snapshotting" while the
-    // platform finishes the auto-snapshot.  The reconciler flips it to
+    // platform finishes the auto-save.  The reconciler flips it to
     // "stopped" on the next status read.
     assert.equal(result.status, "snapshotting");
     // sandboxId is preserved (persistent sandbox identity persists across stop/resume)
@@ -317,7 +317,7 @@ test("stopSandbox runs pre-snapshot cleanup before stop", async () => {
     const cleanupCommand = findPreSnapshotCleanupCommand(handle);
 
     assert.ok(cleanupCommand, "pre-snapshot cleanup command should run");
-    // v2: persistent sandboxes auto-snapshot on stop — stop() is called, not snapshot()
+    // v2: persistent sandboxes auto-save on stop — stop() is called, not snapshot()
     assert.equal(handle.stopCalled, true, "stop should be called after cleanup");
 
     const cleanupEventIndex = h.controller.events.findIndex((event) =>
@@ -407,7 +407,7 @@ test("pre-snapshot cleanup failure does not prevent stop", async () => {
     const result = await stopSandbox();
 
     assert.equal(result.status, "snapshotting");
-    // v2: persistent sandboxes auto-snapshot on stop — stop() is called, not snapshot()
+    // v2: persistent sandboxes auto-save on stop — stop() is called, not snapshot()
     assert.equal(handle.stopCalled, true, "stop should still run after cleanup failure");
   });
 });
@@ -440,7 +440,7 @@ test("stopSandbox logs warning and continues when pre-snapshot cleanup fails", a
     const result = await stopSandbox();
 
     assert.equal(result.status, "snapshotting");
-    // v2: persistent sandboxes auto-snapshot on stop — snapshotId not set from snapshot()
+    // v2: persistent sandboxes auto-save on stop — snapshotId not set from snapshot()
 
     const warningLog = getServerLogs().find(
       (entry) =>
@@ -467,7 +467,7 @@ test("snapshotSandbox delegates to stopSandbox", async () => {
     const result = await snapshotSandbox();
 
     assert.equal(result.status, "snapshotting");
-    // v2: persistent sandboxes auto-snapshot on stop — sandboxId is preserved
+    // v2: persistent sandboxes auto-save on stop — sandboxId is preserved
     assert.equal(result.sandboxId, "sbx-running-2");
   });
 });
@@ -1488,7 +1488,7 @@ test("restoreSandboxFromSnapshot fails closed when enforcing firewall sync fails
 
 /**
  * Helper: triggers createAndBootstrapSandbox by calling ensureSandboxRunning
- * with an uninitialized meta (no snapshotId), captures the scheduled callback,
+ * with an uninitialized meta, captures the scheduled callback,
  * and runs it.
  */
 async function runCreatePath(): Promise<SingleMeta> {
@@ -2022,7 +2022,7 @@ test("ensureSandboxRunning full error recovery: error → create → running", a
   });
 });
 
-test("ensureSandboxRunning create path stores openclaw version (no auto-snapshot)", async () => {
+test("ensureSandboxRunning create path stores openclaw version (no auto-save)", async () => {
   const fake = new FakeSandboxController();
   const originalFetch = globalThis.fetch;
 
@@ -2057,7 +2057,7 @@ test("ensureSandboxRunning create path stores openclaw version (no auto-snapshot
 
       assert.equal(meta.status, "running");
       assert.equal(meta.openclawVersion, "openclaw 9.9.9");
-      assert.equal(meta.snapshotId, null, "no auto-snapshot after bootstrap");
+      assert.equal(meta.snapshotId, null, "no auto-save after bootstrap");
       assert.equal(handle.snapshotCalled, false, "snapshot should not be called after bootstrap");
     } finally {
       globalThis.fetch = originalFetch;
@@ -2300,7 +2300,7 @@ test("restoreSandboxFromSnapshot falls back to createAndBootstrapSandbox when sn
       // Without snapshotId AND with status "stopped" (not "uninitialized"),
       // scheduleLifecycleWork picks "creating" path since snapshotId is null
       const metaBefore = await getInitializedMeta();
-      assert.equal(metaBefore.status, "creating", "Should pick 'creating' when no snapshotId");
+      assert.equal(metaBefore.status, "creating", "Should pick 'creating' when no persistent sandbox exists");
 
       assert.ok(scheduledCallback);
       await (scheduledCallback as () => Promise<void>)();
@@ -2505,7 +2505,7 @@ test("[lifecycle] touchRunningSandbox extend timeout throws -> marks sandbox una
 
     const result = await touchRunningSandbox();
     // Non-sandbox_timeout_invalid errors now mark the sandbox as unavailable
-    // (status transitions to "error" when no snapshotId, "stopped" when snapshotId exists)
+    // (status transitions according to whether manual checkpoint metadata exists)
     assert.ok(
       result.status === "error" || result.status === "stopped",
       `Expected error or stopped status, got: ${result.status}`,
@@ -3764,7 +3764,7 @@ test("touchRunningSandbox marks sandbox unavailable when controller.get() fails"
     };
 
     const result = await touchRunningSandbox();
-    assert.equal(result.status, "stopped", "Should transition to stopped (has snapshotId)");
+    assert.equal(result.status, "stopped", "Should transition to stopped with manual checkpoint metadata");
     assert.ok(result.lastError?.includes("sandbox lookup failed"), "lastError should mention lookup failure");
     assert.equal(result.sandboxId, null, "sandboxId should be cleared");
   });
@@ -4599,7 +4599,7 @@ test("runtime reconcile updates runtimeDynamicConfigHash but not snapshotDynamic
   await withHarness(async (h) => {
     await h.driveToRunning();
 
-    // Seed snapshot-truth from a prior snapshot.
+    // Seed prepared-state truth from a prior snapshot.
     await h.mutateMeta((meta) => {
       meta.snapshotDynamicConfigHash = "old-snapshot-hash";
       meta.runtimeDynamicConfigHash = "stale-runtime-hash";
@@ -4616,13 +4616,13 @@ test("runtime reconcile updates runtimeDynamicConfigHash but not snapshotDynamic
     const expectedHash = computeGatewayConfigHash({});
     assert.equal(meta.runtimeDynamicConfigHash, expectedHash);
     assert.equal(meta.snapshotDynamicConfigHash, "old-snapshot-hash",
-      "Snapshot-truth must not be altered by runtime reconcile");
+      "Prepared-state truth must not be altered by runtime reconcile");
     assert.equal(meta.restorePreparedStatus, "dirty",
       "Runtime reconcile should mark restore target dirty");
   });
 });
 
-test("v2 persistent resume clears snapshot-era asset hashes", async () => {
+test("v2 persistent resume preserves legacy snapshot fields while using persisted state truth", async () => {
   const fake = new FakeSandboxController();
   const originalFetch = globalThis.fetch;
 
@@ -4633,6 +4633,9 @@ test("v2 persistent resume clears snapshot-era asset hashes", async () => {
       meta.gatewayToken = "test-gw-token";
       meta.snapshotDynamicConfigHash = null;
       meta.snapshotAssetSha256 = "old-snapshot-asset-hash";
+      meta.persistedStateDynamicConfigHash = null;
+      meta.persistedStateAssetSha256 = null;
+      meta.persistedStateSource = null;
     });
 
     globalThis.fetch = async () =>
@@ -4642,12 +4645,18 @@ test("v2 persistent resume clears snapshot-era asset hashes", async () => {
       await triggerRestore(fake, { tokenOverride: "test-ai-key" });
 
       const meta = await getInitializedMeta();
-      // v2: createAndBootstrapSandboxWithinLifecycleLock clears snapshot-era fields
+      // v2: legacy snapshot fields remain compatibility metadata; persistedState* is the normal truth.
       assert.equal(
         meta.snapshotAssetSha256,
-        null,
-        "snapshotAssetSha256 should be cleared by v2 create path",
+        "old-snapshot-asset-hash",
+        "legacy snapshotAssetSha256 should remain compatibility metadata",
       );
+      assert.equal(
+        meta.persistedStateAssetSha256,
+        "old-snapshot-asset-hash",
+        "persistedStateAssetSha256 hydrates from legacy snapshot truth",
+      );
+      assert.equal(meta.persistedStateSource, "manual-snapshot");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -4666,7 +4675,7 @@ test("restore after runtime-only reconcile still performs hot-path config write"
       meta.snapshotId = "snap-stale-snapshot-hash";
       meta.gatewayToken = "test-gw-token";
       // Simulate: runtime was reconciled (runtimeDynamicConfigHash is fresh)
-      // but snapshot-truth is stale (snapshotDynamicConfigHash differs).
+      // but prepared-state truth is stale (snapshotDynamicConfigHash differs).
       meta.snapshotDynamicConfigHash = "stale-snapshot-hash";
       meta.runtimeDynamicConfigHash = currentHash;
     });
@@ -4730,6 +4739,8 @@ test("isPreparedRestoreReusable returns true only when all hashes match and stat
   assert.equal(
     isPreparedRestoreReusable({
       meta: {
+        persistedStateDynamicConfigHash: "cfg-hash",
+        persistedStateAssetSha256: "asset-hash",
         snapshotDynamicConfigHash: "cfg-hash",
         snapshotAssetSha256: "asset-hash",
         restorePreparedStatus: "ready",
@@ -4744,6 +4755,8 @@ test("isPreparedRestoreReusable returns true only when all hashes match and stat
   assert.equal(
     isPreparedRestoreReusable({
       meta: {
+        persistedStateDynamicConfigHash: "cfg-hash",
+        persistedStateAssetSha256: "asset-hash",
         snapshotDynamicConfigHash: "cfg-hash",
         snapshotAssetSha256: "asset-hash",
         restorePreparedStatus: "dirty",
@@ -4758,6 +4771,8 @@ test("isPreparedRestoreReusable returns true only when all hashes match and stat
   assert.equal(
     isPreparedRestoreReusable({
       meta: {
+        persistedStateDynamicConfigHash: "old-cfg-hash",
+        persistedStateAssetSha256: "asset-hash",
         snapshotDynamicConfigHash: "old-cfg-hash",
         snapshotAssetSha256: "asset-hash",
         restorePreparedStatus: "ready",
@@ -5320,7 +5335,7 @@ test("[lifecycle] touchRunningSandbox marks error when SDK reports failed and no
     assert.equal(
       result.status,
       "error",
-      `Expected error (no snapshotId), got ${result.status}`,
+      `Expected error without manual checkpoint metadata, got ${result.status}`,
     );
     assert.equal(result.sandboxId, null);
   });

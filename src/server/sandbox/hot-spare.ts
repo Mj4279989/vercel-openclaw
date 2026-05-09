@@ -44,7 +44,7 @@ export type PreCreateResult = {
  * Pre-create a hot-spare sandbox candidate from the active sandbox's snapshot.
  *
  * This is a no-op when the feature flag is off or a candidate already exists.
- * Intended to be called after a successful stop (when an auto-snapshot exists).
+ * Intended to be called after a successful stop (when an auto-save exists).
  */
 export async function preCreateHotSpare(
   meta: SingleMeta,

@@ -128,6 +128,7 @@ export async function executeWorkerSandbox(
 
   try {
     sandbox = await getSandboxController().create({
+      persistent: false,
       timeout: clampTimeoutMs(request.sandboxTimeoutMs),
       resources: { vcpus: request.vcpus ?? 1 },
       ...(options.aiGatewayApiKey

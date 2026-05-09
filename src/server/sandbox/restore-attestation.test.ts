@@ -69,6 +69,7 @@ test("buildRestoreTargetAttestation separates runtime-fresh from snapshot-stale"
   assert.equal(attestation.reusable, false);
   assert.equal(attestation.needsPrepare, true);
   assert.deepEqual(attestation.reasons, [
+    "persisted-state-config-stale",
     "snapshot-config-stale",
     "restore-target-dirty",
   ]);
@@ -150,7 +151,7 @@ test("buildRestoreTargetAttestation marks stale snapshot hashes (config + assets
   assert.ok(attestation.reasons.includes("restore-target-dirty"));
 });
 
-test("buildRestoreTargetAttestation: missing snapshotId is never reusable even when hashes match", () => {
+test("buildRestoreTargetAttestation: v2 persistent state is reusable without manual snapshotId", () => {
   const base = createDefaultMeta(Date.now(), "gw-token");
   const desiredConfigHash = computeGatewayConfigHash({});
   const desiredAssetSha256 = buildRestoreAssetManifest().sha256;
@@ -158,6 +159,10 @@ test("buildRestoreTargetAttestation: missing snapshotId is never reusable even w
   const attestation = buildRestoreTargetAttestation({
     ...base,
     snapshotId: null,
+    persistedStateDynamicConfigHash: desiredConfigHash,
+    persistedStateAssetSha256: desiredAssetSha256,
+    persistedStateSavedAt: 123,
+    persistedStateSource: "persistent-auto-save",
     snapshotDynamicConfigHash: desiredConfigHash,
     runtimeDynamicConfigHash: desiredConfigHash,
     snapshotAssetSha256: desiredAssetSha256,
@@ -167,9 +172,9 @@ test("buildRestoreTargetAttestation: missing snapshotId is never reusable even w
     restorePreparedAt: 123,
   });
 
-  assert.equal(attestation.reusable, false);
-  assert.equal(attestation.needsPrepare, true);
-  assert.ok(attestation.reasons.includes("snapshot-missing"));
+  assert.equal(attestation.reusable, true);
+  assert.equal(attestation.needsPrepare, false);
+  assert.ok(!attestation.reasons.includes("persisted-state-missing"));
 });
 
 test("buildRestoreTargetAttestation: present snapshotId with matching hashes is reusable", () => {
@@ -204,6 +209,10 @@ function makeAttestation(
   return {
     desiredDynamicConfigHash: "cfg-current",
     desiredAssetSha256: "asset-current",
+    persistedStateDynamicConfigHash: "cfg-current",
+    persistedStateAssetSha256: "asset-current",
+    persistedStateSavedAt: 123,
+    persistedStateSource: "persistent-auto-save",
     snapshotDynamicConfigHash: "cfg-current",
     runtimeDynamicConfigHash: "cfg-current",
     snapshotAssetSha256: "asset-current",
@@ -212,8 +221,10 @@ function makeAttestation(
     restorePreparedReason: "prepared",
     restorePreparedAt: 123,
     runtimeConfigFresh: true,
+    persistedStateConfigFresh: true,
     snapshotConfigFresh: true,
     runtimeAssetsFresh: true,
+    persistedStateAssetsFresh: true,
     snapshotAssetsFresh: true,
     reusable: true,
     needsPrepare: false,
@@ -277,7 +288,7 @@ test("buildRestoreTargetPlan requires ensure-running before destructive prepare"
           priority: "required",
           title: "Prepare a fresh restore target",
           description:
-            "The current snapshot cannot be reused: snapshot-config-stale.",
+            "The current persisted restore target cannot be reused: snapshot-config-stale.",
           request: {
             method: "POST",
             path: "/api/admin/prepare-restore",
@@ -293,7 +304,7 @@ test("buildRestoreTargetPlan requires ensure-running before destructive prepare"
 // buildRestoreDecision tests
 // ---------------------------------------------------------------------------
 
-test("buildRestoreDecision: snapshotId missing with matching hashes and ready status yields non-reusable with snapshot-missing reason", () => {
+test("buildRestoreDecision: persistent saved state can be reusable without manual snapshotId", () => {
   const base = createDefaultMeta(Date.now(), "gw-token");
   const desiredConfigHash = computeGatewayConfigHash({});
   const desiredAssetSha256 = buildRestoreAssetManifest().sha256;
@@ -301,6 +312,10 @@ test("buildRestoreDecision: snapshotId missing with matching hashes and ready st
   const meta = {
     ...base,
     snapshotId: null,
+    persistedStateDynamicConfigHash: desiredConfigHash,
+    persistedStateAssetSha256: desiredAssetSha256,
+    persistedStateSavedAt: 123,
+    persistedStateSource: "persistent-auto-save" as const,
     snapshotDynamicConfigHash: desiredConfigHash,
     runtimeDynamicConfigHash: desiredConfigHash,
     snapshotAssetSha256: desiredAssetSha256,
@@ -318,14 +333,11 @@ test("buildRestoreDecision: snapshotId missing with matching hashes and ready st
     destructive: false,
   });
 
-  assert.equal(decision.reusable, false);
-  assert.equal(decision.needsPrepare, true);
-  assert.ok(decision.reasons.includes("snapshot-missing"));
-  assert.deepEqual(decision.requiredActions, [
-    "ensure-running",
-    "prepare-destructive",
-  ]);
-  assert.equal(decision.nextAction, "ensure-running");
+  assert.equal(decision.reusable, true);
+  assert.equal(decision.needsPrepare, false);
+  assert.ok(!decision.reasons.includes("persisted-state-missing"));
+  assert.deepEqual(decision.requiredActions, []);
+  assert.equal(decision.nextAction, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -393,7 +405,7 @@ test("Q32: restore-target-dirty and snapshot-config-stale appear together when c
   // Config changed → snapshot config hash is stale AND restore-prepared=dirty.
   // Both reasons surface together — they describe the same underlying event
   // (config changed after last prepare), but from different vantage points:
-  //   - snapshot-config-stale: attestation of the snapshot image contents
+  //   - snapshot-config-stale: attestation of the prepared persisted state contents
   //   - restore-target-dirty: pre-verified flag set when config changed
   const decision = buildRestoreDecision({
     meta: {

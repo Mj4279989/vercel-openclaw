@@ -450,12 +450,12 @@ export function createScenarioHarness(options?: {
       await stopSandbox();
       // v2 non-blocking stop parks meta in "snapshotting" — mirror the
       // production flow where the next status read reconciles it to
-      // "stopped" once the SDK confirms the auto-snapshot is done.
+      // "stopped" once the SDK confirms the auto-save is done.
       await reconcileSnapshottingStatus();
       let meta = await getInitializedMeta();
       assert.equal(meta.status, "stopped");
 
-      // v2 persistent sandboxes auto-snapshot on stop — the SDK handles it
+      // v2 persistent sandboxes auto-save on stop — the SDK handles it
       // internally and metadata no longer tracks a snapshotId from snapshot().
       // For tests that need a snapshotId (e.g. restore-from-history), inject
       // a synthetic one into metadata so downstream assertions work.

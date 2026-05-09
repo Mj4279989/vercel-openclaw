@@ -407,22 +407,35 @@ export type SingleMeta = {
   _schemaVersion: number;
   version: number;
   id: string;
+  /** Vercel Sandbox v2 persistent sandbox name/handle used by this app. */
   sandboxId: string | null;
+  /** Manual/debug snapshot ID. Not required for normal v2 persistent resume. */
   snapshotId: string | null;
   /** @deprecated Legacy hash — kept for backward hydration only. Use
    *  snapshotDynamicConfigHash / runtimeDynamicConfigHash instead. */
   snapshotConfigHash: string | null;
 
-  /** SHA-256 of the gateway config baked into the most recent snapshot image.
+  /** SHA-256 of the gateway config baked into the most recent prepared persisted state.
    *  Only set by actual snapshot-creation paths. */
   snapshotDynamicConfigHash: string | null;
   /** SHA-256 of the gateway config currently on the running sandbox.
    *  Updated by runtime reconciliation — never used for restore skip gates. */
   runtimeDynamicConfigHash: string | null;
-  /** SHA-256 of static restore assets in the most recent snapshot image. */
+  /** SHA-256 of static restore assets in the most recent prepared persisted state. */
   snapshotAssetSha256: string | null;
   /** SHA-256 of static restore assets on the running sandbox. */
   runtimeAssetSha256: string | null;
+
+  /** SHA-256 of gateway config in the last verified v2 persistent auto-save. */
+  persistedStateDynamicConfigHash: string | null;
+  /** SHA-256 of static assets in the last verified v2 persistent auto-save. */
+  persistedStateAssetSha256: string | null;
+  /** Unix-epoch ms when the persistent auto-save/manual checkpoint was verified. */
+  persistedStateSavedAt: number | null;
+  /** Source of the current persisted-state restore target. */
+  persistedStateSource: "persistent-auto-save" | "manual-snapshot" | null;
+  /** SDK-reported current snapshot ID when available; informational only. */
+  currentSnapshotId?: string | null;
 
   /** Whether the next restore target is verified-ready. */
   restorePreparedStatus: RestorePreparedStatus;
@@ -493,6 +506,11 @@ export function createDefaultMeta(
     runtimeDynamicConfigHash: null,
     snapshotAssetSha256: null,
     runtimeAssetSha256: null,
+    persistedStateDynamicConfigHash: null,
+    persistedStateAssetSha256: null,
+    persistedStateSavedAt: null,
+    persistedStateSource: null,
+    currentSnapshotId: null,
     restorePreparedStatus: "unknown",
     restorePreparedReason: null,
     restorePreparedAt: null,
@@ -580,6 +598,40 @@ export function ensureMetaShape(
   }
   const now = Date.now();
   const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : now;
+  const legacySnapshotDynamicConfigHash =
+    typeof (raw as Record<string, unknown>).snapshotDynamicConfigHash === "string"
+      ? (raw as Record<string, unknown>).snapshotDynamicConfigHash as string
+      : typeof (raw as Record<string, unknown>).snapshotConfigHash === "string"
+        ? (raw as Record<string, unknown>).snapshotConfigHash as string
+        : null;
+  const legacySnapshotAssetSha256 =
+    typeof (raw as Record<string, unknown>).snapshotAssetSha256 === "string"
+      ? (raw as Record<string, unknown>).snapshotAssetSha256 as string
+      : null;
+  const legacyPreparedAt =
+    typeof (raw as Record<string, unknown>).restorePreparedAt === "number"
+      ? (raw as Record<string, unknown>).restorePreparedAt as number
+      : null;
+  const legacySnapshotId = typeof raw.snapshotId === "string" ? raw.snapshotId : null;
+  const persistedStateDynamicConfigHash =
+    typeof (raw as Record<string, unknown>).persistedStateDynamicConfigHash === "string"
+      ? (raw as Record<string, unknown>).persistedStateDynamicConfigHash as string
+      : legacySnapshotDynamicConfigHash;
+  const persistedStateAssetSha256 =
+    typeof (raw as Record<string, unknown>).persistedStateAssetSha256 === "string"
+      ? (raw as Record<string, unknown>).persistedStateAssetSha256 as string
+      : legacySnapshotAssetSha256;
+  const persistedStateSavedAt =
+    typeof (raw as Record<string, unknown>).persistedStateSavedAt === "number"
+      ? (raw as Record<string, unknown>).persistedStateSavedAt as number
+      : legacyPreparedAt;
+  const rawPersistedStateSource = (raw as Record<string, unknown>).persistedStateSource;
+  const persistedStateSource =
+    rawPersistedStateSource === "persistent-auto-save" || rawPersistedStateSource === "manual-snapshot"
+      ? rawPersistedStateSource
+      : persistedStateDynamicConfigHash || persistedStateAssetSha256
+        ? legacySnapshotId ? "manual-snapshot" : "persistent-auto-save"
+        : null;
 
   return {
     _schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -591,28 +643,28 @@ export function ensureMetaShape(
         : 1,
     id: typeof raw.id === "string" ? raw.id : expectedInstanceId,
     sandboxId: typeof raw.sandboxId === "string" ? raw.sandboxId : null,
-    snapshotId: typeof raw.snapshotId === "string" ? raw.snapshotId : null,
+    snapshotId: legacySnapshotId,
     snapshotConfigHash:
       typeof (raw as Record<string, unknown>).snapshotConfigHash === "string"
         ? (raw as Record<string, unknown>).snapshotConfigHash as string
         : null,
-    snapshotDynamicConfigHash:
-      typeof (raw as Record<string, unknown>).snapshotDynamicConfigHash === "string"
-        ? (raw as Record<string, unknown>).snapshotDynamicConfigHash as string
-        : typeof (raw as Record<string, unknown>).snapshotConfigHash === "string"
-          ? (raw as Record<string, unknown>).snapshotConfigHash as string
-          : null,
+    snapshotDynamicConfigHash: legacySnapshotDynamicConfigHash,
     runtimeDynamicConfigHash:
       typeof (raw as Record<string, unknown>).runtimeDynamicConfigHash === "string"
         ? (raw as Record<string, unknown>).runtimeDynamicConfigHash as string
         : null,
-    snapshotAssetSha256:
-      typeof (raw as Record<string, unknown>).snapshotAssetSha256 === "string"
-        ? (raw as Record<string, unknown>).snapshotAssetSha256 as string
-        : null,
+    snapshotAssetSha256: legacySnapshotAssetSha256,
     runtimeAssetSha256:
       typeof (raw as Record<string, unknown>).runtimeAssetSha256 === "string"
         ? (raw as Record<string, unknown>).runtimeAssetSha256 as string
+        : null,
+    persistedStateDynamicConfigHash,
+    persistedStateAssetSha256,
+    persistedStateSavedAt,
+    persistedStateSource,
+    currentSnapshotId:
+      typeof (raw as Record<string, unknown>).currentSnapshotId === "string"
+        ? (raw as Record<string, unknown>).currentSnapshotId as string
         : null,
     restorePreparedStatus:
       isRestorePreparedStatus((raw as Record<string, unknown>).restorePreparedStatus)
@@ -622,10 +674,7 @@ export function ensureMetaShape(
       isRestorePreparedReason((raw as Record<string, unknown>).restorePreparedReason)
         ? (raw as Record<string, unknown>).restorePreparedReason as RestorePreparedReason
         : null,
-    restorePreparedAt:
-      typeof (raw as Record<string, unknown>).restorePreparedAt === "number"
-        ? (raw as Record<string, unknown>).restorePreparedAt as number
-        : null,
+    restorePreparedAt: legacyPreparedAt,
     openclawVersion:
       typeof raw.openclawVersion === "string" ? raw.openclawVersion : null,
     status: isSingleStatus(raw.status) ? raw.status : "uninitialized",

@@ -1013,9 +1013,9 @@ export async function stopSandbox(): Promise<SingleMeta> {
           }
         });
 
-        // v2 persistent sandboxes auto-snapshot on stop — no manual snapshot() needed.
+        // v2 persistent sandboxes auto-save on stop — no manual snapshot() needed.
         // blocking:false lets the stop request return as soon as the SDK has
-        // accepted it; the auto-snapshot continues in the background and we
+        // accepted it; the auto-save continues in the background and we
         // reconcile the status via reconcileSnapshottingStatus().
         try {
           await sandbox.stop({ blocking: false });
@@ -1425,7 +1425,7 @@ export async function ensureRunningSandboxDynamicConfigFresh(input: {
 
   // Runtime reconcile compares against runtimeDynamicConfigHash (what is
   // actually on the running sandbox) — NOT snapshotDynamicConfigHash (what
-  // was baked into the snapshot image).
+  // was last persisted for a prepared restore target).
   const runtimeHash = meta.runtimeDynamicConfigHash ?? meta.snapshotConfigHash;
 
   logInfo("sandbox.config_reconcile.checkpoint_before", {
@@ -1494,9 +1494,9 @@ export async function ensureRunningSandboxDynamicConfigFresh(input: {
     return { verified: false, changed: true, reason: "restart-failed" };
   }
 
-  // Update runtime-truth only — snapshot-truth is stamped only by snapshot
-  // creation paths.  Mark restore target dirty since the running sandbox now
-  // differs from the snapshot image.
+  // Update runtime truth only. Prepared persisted-state truth is stamped only
+  // by prepare/manual snapshot paths, so mark restore target dirty when
+  // the running sandbox diverges.
   await mutateMeta((next) => {
     next.runtimeDynamicConfigHash = expectedHash;
     if (
@@ -1529,7 +1529,7 @@ export async function ensureRunningSandboxDynamicConfigFresh(input: {
 
 /**
  * Mark the next restore target as dirty.  Call this whenever the running
- * sandbox diverges from its snapshot image (channel config change, deploy
+ * sandbox diverges from its prepared persisted state (channel config change, deploy
  * drift, manual reset).
  */
 export async function markRestoreTargetDirty(input: {
@@ -1556,6 +1556,8 @@ export async function markRestoreTargetDirty(input: {
 export function isPreparedRestoreReusable(input: {
   meta: Pick<
     SingleMeta,
+    | "persistedStateDynamicConfigHash"
+    | "persistedStateAssetSha256"
     | "snapshotDynamicConfigHash"
     | "snapshotAssetSha256"
     | "restorePreparedStatus"
@@ -1565,8 +1567,8 @@ export function isPreparedRestoreReusable(input: {
 }): boolean {
   return (
     input.meta.restorePreparedStatus === "ready" &&
-    input.meta.snapshotDynamicConfigHash === input.desiredDynamicConfigHash &&
-    input.meta.snapshotAssetSha256 === input.desiredAssetSha256
+    (input.meta.persistedStateDynamicConfigHash ?? input.meta.snapshotDynamicConfigHash) === input.desiredDynamicConfigHash &&
+    (input.meta.persistedStateAssetSha256 ?? input.meta.snapshotAssetSha256) === input.desiredAssetSha256
   );
 }
 
@@ -1599,9 +1601,9 @@ export type PrepareRestoreResult = {
 
 /**
  * Prepare the next restore target.  When `destructive` is true, the sandbox
- * is snapshot-and-stopped so the snapshot image matches current config and
+ * is stopped so Sandbox v2 auto-saves state matching current config and
  * assets.  When `destructive` is false, the function reports whether the
- * current snapshot is reusable without modifying state.
+ * current persisted state is reusable without modifying state.
  */
 export async function prepareRestoreTarget(input: {
   origin: string;
@@ -1648,8 +1650,9 @@ export async function prepareRestoreTarget(input: {
   if (decision.reusable) {
     logInfo("sandbox.restore_target.already_prepared", {
       snapshotId: meta.snapshotId,
-      snapshotDynamicConfigHash: meta.snapshotDynamicConfigHash,
-      snapshotAssetSha256: meta.snapshotAssetSha256,
+      persistedStateDynamicConfigHash: meta.persistedStateDynamicConfigHash,
+      persistedStateAssetSha256: meta.persistedStateAssetSha256,
+      persistedStateSource: meta.persistedStateSource,
     });
     return {
       ok: true,
@@ -1657,9 +1660,9 @@ export async function prepareRestoreTarget(input: {
       state: meta.restorePreparedStatus,
       reason: meta.restorePreparedReason,
       snapshotId: meta.snapshotId,
-      snapshotDynamicConfigHash: meta.snapshotDynamicConfigHash,
+      snapshotDynamicConfigHash: meta.persistedStateDynamicConfigHash ?? meta.snapshotDynamicConfigHash,
       runtimeDynamicConfigHash: meta.runtimeDynamicConfigHash,
-      snapshotAssetSha256: meta.snapshotAssetSha256,
+      snapshotAssetSha256: meta.persistedStateAssetSha256 ?? meta.snapshotAssetSha256,
       runtimeAssetSha256: meta.runtimeAssetSha256,
       preparedAt: meta.restorePreparedAt,
       actions: [{ id: "stamp-meta", status: "skipped", message: "already prepared" }],
@@ -1680,9 +1683,9 @@ export async function prepareRestoreTarget(input: {
       state: meta.restorePreparedStatus === "ready" ? "dirty" : meta.restorePreparedStatus,
       reason: meta.restorePreparedReason,
       snapshotId: meta.snapshotId,
-      snapshotDynamicConfigHash: meta.snapshotDynamicConfigHash,
+      snapshotDynamicConfigHash: meta.persistedStateDynamicConfigHash ?? meta.snapshotDynamicConfigHash,
       runtimeDynamicConfigHash: meta.runtimeDynamicConfigHash,
-      snapshotAssetSha256: meta.snapshotAssetSha256,
+      snapshotAssetSha256: meta.persistedStateAssetSha256 ?? meta.snapshotAssetSha256,
       runtimeAssetSha256: meta.runtimeAssetSha256,
       preparedAt: meta.restorePreparedAt,
       actions: [{ id: "snapshot", status: "failed", message: "destructive snapshot required but not allowed" }],
@@ -1827,10 +1830,10 @@ export async function prepareRestoreTarget(input: {
     };
   }
 
-  // Step 5: Snapshot and stop.
+  // Step 5: Stop and let Vercel Sandbox v2 persist the named sandbox state.
   try {
     await stopSandbox();
-    actions.push({ id: "snapshot", status: "completed", message: "snapshot created" });
+    actions.push({ id: "snapshot", status: "completed", message: "persistent auto-save requested" });
   } catch (err) {
     actions.push({
       id: "snapshot",
@@ -1858,17 +1861,38 @@ export async function prepareRestoreTarget(input: {
     };
   }
 
-  // stopSandbox already calls recordSnapshotMetadata which stamps
-  // snapshotDynamicConfigHash, snapshotAssetSha256, and restorePreparedStatus.
-  actions.push({ id: "stamp-meta", status: "completed", message: "snapshot truth recorded" });
+  const desiredDynamicConfigHash = computeGatewayConfigHash({
+    telegramBotToken: meta.channels.telegram?.botToken,
+    telegramWebhookSecret: meta.channels.telegram?.webhookSecret,
+    slackCredentials: meta.channels.slack
+      ? {
+          botToken: meta.channels.slack.botToken,
+          signingSecret: meta.channels.slack.signingSecret,
+        }
+      : undefined,
+    whatsappConfig: toWhatsAppGatewayConfig(meta.channels.whatsapp),
+  });
+  const desiredAssetSha256 = buildRestoreAssetManifest().sha256;
+  const preparedAt = Date.now();
+  await mutateMeta((next) => {
+    next.persistedStateDynamicConfigHash = desiredDynamicConfigHash;
+    next.persistedStateAssetSha256 = desiredAssetSha256;
+    next.persistedStateSavedAt = preparedAt;
+    next.persistedStateSource = "persistent-auto-save";
+    next.restorePreparedStatus = "ready";
+    next.restorePreparedReason = "prepared";
+    next.restorePreparedAt = preparedAt;
+  });
+  actions.push({ id: "stamp-meta", status: "completed", message: "persistent auto-save truth recorded" });
 
   const finalMeta = await getInitializedMeta();
   const finalDecision = buildRestoreDecision({ meta: finalMeta, source: "prepare", destructive: true });
 
   logInfo("sandbox.restore_target.prepare_complete", {
     snapshotId: finalMeta.snapshotId,
-    snapshotDynamicConfigHash: finalMeta.snapshotDynamicConfigHash,
-    snapshotAssetSha256: finalMeta.snapshotAssetSha256,
+    persistedStateDynamicConfigHash: finalMeta.persistedStateDynamicConfigHash,
+    persistedStateAssetSha256: finalMeta.persistedStateAssetSha256,
+    persistedStateSource: finalMeta.persistedStateSource,
     restorePreparedStatus: finalMeta.restorePreparedStatus,
   });
 
@@ -1895,9 +1919,9 @@ export async function prepareRestoreTarget(input: {
     state: finalMeta.restorePreparedStatus,
     reason: finalMeta.restorePreparedReason,
     snapshotId: finalMeta.snapshotId,
-    snapshotDynamicConfigHash: finalMeta.snapshotDynamicConfigHash,
+    snapshotDynamicConfigHash: finalMeta.persistedStateDynamicConfigHash ?? finalMeta.snapshotDynamicConfigHash,
     runtimeDynamicConfigHash: finalMeta.runtimeDynamicConfigHash,
-    snapshotAssetSha256: finalMeta.snapshotAssetSha256,
+    snapshotAssetSha256: finalMeta.persistedStateAssetSha256 ?? finalMeta.snapshotAssetSha256,
     runtimeAssetSha256: finalMeta.runtimeAssetSha256,
     preparedAt: finalMeta.restorePreparedAt,
     actions,
@@ -1916,8 +1940,7 @@ export type PrepareHotSpareResult = {
 };
 
 /**
- * Prepare a snapshot-backed hot-spare sandbox from the latest prepared restore
- * target.  Intended to be called by the watchdog after a successful oracle
+ * Prepare a hot-spare sandbox from the latest prepared restore target.  Intended to be called by the watchdog after a successful oracle
  * prepare so the spare is ready before the next Telegram wake arrives.
  */
 export async function prepareHotSpareFromPreparedRestore(options?: {
@@ -2239,11 +2262,10 @@ export async function reconcileStaleRunningStatus(): Promise<SingleMeta> {
 }
 
 /**
- * Reconcile meta while a non-blocking stop is finishing its auto-snapshot.
+ * Reconcile meta while a non-blocking stop is finishing persistent auto-save.
  *
  * After `stopSandbox()` calls `sandbox.stop({ blocking: false })` the app
- * parks meta at `status = "snapshotting"`.  The SDK continues writing the
- * snapshot in the background; this helper polls `sandbox.status` and
+ * parks meta at `status = "snapshotting"`.  The SDK continues saving persistent state in the background; this helper polls `sandbox.status` and
  * transitions meta to `"stopped"` (happy path), `"error"` (snapshot failed),
  * or leaves it untouched if the snapshot is still in flight.
  *
@@ -2626,8 +2648,9 @@ async function withTokenRefreshLock(
 }
 
 // ---------------------------------------------------------------------------
-// Core credential write (gateway token only — AI key is injected via network
-// policy transform and never enters the sandbox).
+// Core credential write for restore scripts. AI Gateway auth is primarily
+// injected via network policy transform; bootstrap env may still carry a
+// compatibility token until that fallback is removed.
 // ---------------------------------------------------------------------------
 
 const WRITE_RESTORE_CREDENTIAL_FILES_SCRIPT = [
@@ -3067,6 +3090,10 @@ async function createAndBootstrapSandboxWithinLifecycleLock(
         meta.snapshotConfigHash = null;
         meta.snapshotDynamicConfigHash = null;
         meta.snapshotAssetSha256 = null;
+        meta.persistedStateDynamicConfigHash = null;
+        meta.persistedStateAssetSha256 = null;
+        meta.persistedStateSavedAt = null;
+        meta.persistedStateSource = null;
         meta.restorePreparedStatus = "dirty";
         meta.restorePreparedReason = "snapshot-missing";
         meta.restorePreparedAt = null;
@@ -3168,6 +3195,10 @@ async function createAndBootstrapSandboxWithinLifecycleLock(
           meta.snapshotConfigHash = null;
           meta.snapshotDynamicConfigHash = null;
           meta.snapshotAssetSha256 = null;
+          meta.persistedStateDynamicConfigHash = null;
+          meta.persistedStateAssetSha256 = null;
+          meta.persistedStateSavedAt = null;
+          meta.persistedStateSource = null;
           meta.restorePreparedStatus = "dirty";
           meta.restorePreparedReason = "snapshot-missing";
           meta.restorePreparedAt = null;
@@ -3426,9 +3457,6 @@ async function createAndBootstrapSandboxWithinLifecycleLock(
         meta.portUrls = resolvePortUrls(sandbox);
         meta.lastAccessedAt = Date.now();
         meta.lastError = null;
-        meta.snapshotConfigHash = null;
-        meta.snapshotDynamicConfigHash = null;
-        meta.snapshotAssetSha256 = null;
         meta.lastRestoreMetrics = metrics;
         if (!meta.restoreHistory) meta.restoreHistory = [];
         meta.restoreHistory = [
@@ -3662,7 +3690,7 @@ function _recordSnapshotMetadata(
   meta.snapshotId = snapshotId;
   if (configHash) {
     meta.snapshotConfigHash = configHash;
-    // Snapshot-truth: this hash describes the config in the snapshot image.
+    // Manual snapshot truth: this hash describes the config in the snapshot checkpoint.
     meta.snapshotDynamicConfigHash = configHash;
   }
   if (assetSha256) {
@@ -3797,6 +3825,11 @@ function clearSandboxRuntimeStateForReset(meta: SingleMeta): void {
   meta.runtimeDynamicConfigHash = null;
   meta.snapshotAssetSha256 = null;
   meta.runtimeAssetSha256 = null;
+  meta.persistedStateDynamicConfigHash = null;
+  meta.persistedStateAssetSha256 = null;
+  meta.persistedStateSavedAt = null;
+  meta.persistedStateSource = null;
+  meta.currentSnapshotId = null;
   meta.restorePreparedStatus = "unknown";
   meta.restorePreparedReason = null;
   meta.restorePreparedAt = null;

@@ -18,17 +18,7 @@ import { getInitializedMeta } from "@/server/store/store";
 import { getStore } from "@/server/store/store";
 import { mutateMeta } from "@/server/store/store";
 import { createHash, createHmac } from "node:crypto";
-import {
-  channelForwardDiagnosticKey,
-  channelPendingBootMessageKey,
-  channelPendingBootMessageLockKey,
-} from "@/server/store/keyspace";
-
-// OpenClaw turns can run for tens of minutes (long tool chains, image
-// generation, MCP calls). Keep the pending-boot-ts entries alive long
-// enough to cover a reasonable long-turn window so the bot-reply
-// cleanup path still finds them. Short TTL (10 min) left orphans.
-const PENDING_BOOT_MESSAGE_TTL_SECONDS = 60 * 60;
+import { channelForwardDiagnosticKey } from "@/server/store/keyspace";
 // Discord deferred-interaction tokens are valid for 15 minutes. Soft-
 // deadline a little under that so a reply attempt at 13.5min still
 // has wall-clock to land before Discord starts returning 404
@@ -138,50 +128,6 @@ async function sendDiscordTimeoutNotice(input: {
     status: fallback?.status ?? null,
   };
 }
-// Bounded list so a pathological channel cannot balloon Redis on repeated
-// failed wakes. 20 is well above the realistic concurrent-wake count in
-// a single Slack thread and below "this thread is clearly pathological."
-const MAX_PENDING_BOOT_TS_PER_THREAD = 20;
-
-function coercePendingBootTsList(value: unknown): string[] {
-  if (typeof value === "string" && value.length > 0) return [value];
-  if (Array.isArray(value)) {
-    return value.filter((v): v is string => typeof v === "string" && v.length > 0);
-  }
-  return [];
-}
-
-/**
- * Append a Slack boot-message ts to the pending-boot list for a given
- * thread, using a short-lived Redis lock to serialize concurrent
- * append+read+write. Tolerates legacy string values left by the
- * previous single-ts implementation.
- */
-async function appendSlackPendingBootTs(
-  slackChannel: string,
-  threadRoot: string | undefined,
-  bootTs: string,
-): Promise<void> {
-  const listKey = channelPendingBootMessageKey("slack", slackChannel, threadRoot);
-  const lockKey = channelPendingBootMessageLockKey(
-    "slack",
-    slackChannel,
-    threadRoot,
-  );
-  const store = getStore();
-  const lockToken = await store.acquireLock(lockKey, 5).catch(() => null);
-  try {
-    const current = await store.getValue<unknown>(listKey);
-    const merged = [...new Set([...coercePendingBootTsList(current), bootTs])];
-    const bounded = merged.slice(-MAX_PENDING_BOOT_TS_PER_THREAD);
-    await store.setValue(listKey, bounded, PENDING_BOOT_MESSAGE_TTL_SECONDS);
-  } finally {
-    if (lockToken) {
-      await store.releaseLock(lockKey, lockToken).catch(() => {});
-    }
-  }
-}
-
 function extractChannelDeliveryId(
   channel: string,
   payload: unknown,
@@ -1306,52 +1252,46 @@ export async function processChannelStep(
     }
 
     // Boot-message cleanup. Slack keeps a "dead-time" status message visible
-    // while OpenClaw/Claude generates the real reply (~5s), then the Slack
-    // webhook deletes it when OpenClaw's reply event arrives. Telegram has no
-    // bot-message webhook signal yet, so native accept must not be treated as
-    // proof of user-visible reply delivery.
+    // while the sandbox wakes. Once the native Slack handler accepts the
+    // event, clear the wrapper message so Slack's own assistant/thread status
+    // owns the visible reply lifecycle. Telegram has no bot-message webhook
+    // signal yet, so native accept must not be treated as proof of
+    // user-visible reply delivery.
     if (existingBootHandle) {
       if (channel === "slack" && forwardResult.ok) {
+        diag.bootMessageAction = "slack-cleared-after-native-accept";
+        diag.bootMessageClearedAt = Date.now();
         await existingBootHandle
-          .update("🦞 Message sent. Waiting for the reply\u2026")
-          .catch(() => {});
-        const slackPayload = payload as {
-          event?: {
-            channel?: string;
-            ts?: string;
-            thread_ts?: string;
-          };
-        } | null;
-        const slackChannel = slackPayload?.event?.channel;
-        // Key the pending-boot list by Slack's actual `thread_ts` so the
-        // bot-reply cleanup on the webhook side can read the same key.
-        //
-        // Threaded reply: bot reply carries thread_ts == root → both sides
-        //   agree on `<channel>:<threadTs>`.
-        // Top-level reply: bot reply has no thread_ts and its own `ts` is
-        //   unrelated to the user message ts → we cannot derive the user's
-        //   ts from the bot reply at all. Use scope=undefined (channel-wide
-        //   top-level pending-boot list) on both sides so they line up.
-        //
-        // Trade-off: concurrent top-level mentions in the same channel
-        // share one list and the first bot reply clears them all. That is
-        // strictly better than the previous behaviour, which left every
-        // top-level boot placeholder dangling until TTL.
-        const threadTs =
-          typeof slackPayload?.event?.thread_ts === "string" &&
-          slackPayload.event.thread_ts.length > 0
-            ? slackPayload.event.thread_ts
-            : undefined;
-        const bootTs =
-          typeof bootMessageId === "string" ? bootMessageId : null;
-        if (slackChannel && bootTs) {
-          try {
-            await appendSlackPendingBootTs(slackChannel, threadTs, bootTs);
-          } catch {
-            // Best effort — if the store write fails the boot message will
-            // just stay until the next reply makes it harmless.
-          }
-        }
+          .clear()
+          .then(() => {
+            logInfo("channels.slack_boot_message_cleared_after_accept", {
+              channel,
+              requestId,
+              deliveryId,
+              bootMessageId: bootMessageId ?? null,
+              forwardStatus: forwardResult.status,
+              forwardAttempts: retryingResult?.attempts ?? null,
+              forwardTransport: retryingResult?.transport ?? null,
+              forwardTotalMs: retryingResult?.totalMs ?? null,
+              placeholderAction: "cleared",
+              clearOnAccept: true,
+              reason: "native_handler_accepted_event",
+            });
+          })
+          .catch((bootError) => {
+            logWarn("channels.slack_boot_message_cleanup_after_accept_failed", {
+              channel,
+              requestId,
+              deliveryId,
+              bootMessageId: bootMessageId ?? null,
+              phase: "accepted-forward",
+              forwardStatus: forwardResult.status,
+              error:
+                bootError instanceof Error
+                  ? bootError.message
+                  : String(bootError),
+            });
+          });
       } else if (channel === "telegram" && forwardResult.ok) {
         diag.bootMessageAction = "telegram-cleared-after-native-accept";
         diag.bootMessageClearedAt = Date.now();

@@ -391,8 +391,8 @@ export function SlackPanel({
             placeholder="Defaults to project name"
           />
           <span className="muted-copy">
-            Overrides the human-facing Slack app name only. Bot handle and
-            slash command stay tied to this Vercel project.
+            Also updates the bot display name. Slash command stays tied to this
+            Vercel project.
           </span>
         </div>
         <div className="inline-actions">

@@ -712,6 +712,13 @@ export function buildGatewayConfig(
       groupPolicy: "open",
       allowFrom: ["*"],
       webhookPath: "/slack/events",
+      // Keep native OpenClaw Slack replies in the original Slack thread.
+      replyToMode: "all",
+      replyToModeByChatType: {
+        direct: "all",
+        group: "all",
+        channel: "all",
+      },
       // Disable exec approval handler — same reason as Telegram above.
       execApprovals: { enabled: false },
     };

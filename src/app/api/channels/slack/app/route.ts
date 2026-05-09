@@ -34,11 +34,10 @@ import { buildPublicUrl, getPublicOrigin } from "@/server/public-url";
  *     appName?:      string             // optional display_information.name override
  *   }
  *
- * Bot handle (bot_user.display_name) and the slash command are always derived
- * from the owning Vercel project (VCLAW_PROJECT_SCOPE / VCLAW_PROJECT_NAME
- * env vars) so two deployments can coexist in the same Slack workspace. The
- * optional `appName` in the body overrides only the human-facing
- * display_information.name.
+ * The optional `appName` in the body overrides Slack display_information.name
+ * and the bot user display name. The slash command remains derived from the
+ * owning Vercel project (VCLAW_PROJECT_SCOPE / VCLAW_PROJECT_NAME env vars)
+ * so two deployments can coexist in the same Slack workspace.
  *
  * Response:
  *   {

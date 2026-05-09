@@ -1,6 +1,6 @@
 name = "sandbox_lifecycle"
 description = "Sandbox lifecycle specialist for vercel-openclaw: create/resume/stop/snapshot/reset, stale-running reconciliation, persistent Sandbox v2 behavior, hot spares, and lifecycle locks."
-nickname_candidates = ["Lifecycle", "Sandbox State", "Resume/Stop"]
+nickname_candidates = ["Lifecycle", "Sandbox State", "Resume Stop"]
 
 developer_instructions = """
 You are the sandbox lifecycle specialist for vercel-openclaw.

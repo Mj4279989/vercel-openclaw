@@ -747,6 +747,31 @@ test("buildGatewayConfig includes whatsapp alongside telegram and slack", () => 
   assert.ok(config.channels?.whatsapp, "whatsapp should be present");
 });
 
+test("buildGatewayConfig includes Slack threaded reply settings", () => {
+  const config = JSON.parse(
+    buildGatewayConfig(
+      undefined,
+      "https://app.example.com",
+      undefined,
+      { botToken: "xoxb-test", signingSecret: "slack-signing-secret" },
+    ),
+  ) as {
+    channels?: {
+      slack?: {
+        replyToMode?: string;
+        replyToModeByChatType?: Record<string, string>;
+      };
+    };
+  };
+
+  assert.equal(config.channels?.slack?.replyToMode, "all");
+  assert.deepEqual(config.channels?.slack?.replyToModeByChatType, {
+    direct: "all",
+    group: "all",
+    channel: "all",
+  });
+});
+
 // ---------------------------------------------------------------------------
 // computeGatewayConfigHash — WhatsApp
 // ---------------------------------------------------------------------------

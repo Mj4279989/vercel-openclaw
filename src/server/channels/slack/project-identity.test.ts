@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { buildSlackManifest } from "./app-definition";
+
 import {
   buildBotDisplayName,
   buildDescription,
@@ -134,6 +136,33 @@ test("buildBotDisplayName: uses `.` separator to satisfy Slack's [a-z0-9-_.] rul
   const name = buildBotDisplayName(identity("vercel-labs", "my-bot"));
   assert.equal(name, "my-bot.vercel-labs");
   assert.match(name, /^[a-z0-9._-]+$/);
+});
+
+test("buildBotDisplayName: app-name override also updates bot display name", () => {
+  const name = buildBotDisplayName(
+    identity("vercel-labs", "my-bot"),
+    "  My Custom Bot!  ",
+  );
+  assert.equal(name, "my-custom-bot");
+  assert.match(name, /^[a-z0-9._-]+$/);
+});
+
+test("buildSlackManifest: app-name override drives app and bot names only", () => {
+  const manifest = buildSlackManifest({
+    webhookUrl: "https://app.example.com/api/channels/slack/webhook",
+    identity: identity("vercel-labs", "my-bot"),
+    appName: "My Custom Bot",
+  }) as {
+    display_information: { name: string };
+    features: {
+      bot_user: { display_name: string };
+      slash_commands: Array<{ command: string }>;
+    };
+  };
+
+  assert.equal(manifest.display_information.name, "My Custom Bot");
+  assert.equal(manifest.features.bot_user.display_name, "my-custom-bot");
+  assert.equal(manifest.features.slash_commands[0]?.command, "/vercel-labs-my-bot");
 });
 
 test("buildDescription: always includes full untruncated `scope=X project=Y` and ≤ 140 chars", () => {

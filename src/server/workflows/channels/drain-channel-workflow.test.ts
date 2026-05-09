@@ -1529,6 +1529,54 @@ test("processChannelStep surfaces Slack retrying forward 200 (after 404 recovery
   assert.equal(capturedChannel, "slack");
 });
 
+test("processChannelStep clears Slack boot message after accepted forward", async () => {
+  let updateCalls = 0;
+  let clearCalls = 0;
+
+  const dependencies = createWorkflowDependencies({
+    buildExistingBootHandle: async () => ({
+      async update(text: string) {
+        updateCalls += 1;
+        void text;
+      },
+      async clear() {
+        clearCalls += 1;
+      },
+    }),
+    runWithBootMessages: async () => ({
+      meta: asMeta({ status: "running", sandboxId: "sbx-slack-accepted" }),
+      bootMessageSent: true,
+    }),
+    forwardToNativeHandlerWithRetry: async (): Promise<RetryingForwardResult> => ({
+      ok: true,
+      status: 200,
+      attempts: 2,
+      totalMs: 250,
+      transport: "public",
+      retries: [{ attempt: 1, reason: "handler-not-ready", status: 404 }],
+    }),
+  });
+
+  await processChannelStep(
+    "slack",
+    { event: { channel: "C-slack-accepted", ts: "1710000000.000444" } },
+    "test",
+    "req-slack-boot-clear",
+    "boot-slack-ts",
+    { dependencies },
+  );
+
+  assert.equal(updateCalls, 0, "accepted Slack forward should not leave a final placeholder update");
+  assert.equal(clearCalls, 1, "accepted Slack forward should delete the wrapper wake message");
+  const logs = getServerLogs();
+  const cleanupLog = logs.find(
+    (entry) => entry.message === "channels.slack_boot_message_cleared_after_accept",
+  );
+  assert.ok(cleanupLog, "Slack boot cleanup should be logged after native accept");
+  assert.equal(cleanupLog?.data?.bootMessageId, "boot-slack-ts");
+  assert.equal(cleanupLog?.data?.placeholderAction, "cleared");
+});
+
 test("processChannelStep keeps Slack 401 fatal (signature failure is unrecoverable)", async () => {
   // Unlike Telegram, a 401 from Slack Bolt means signature re-verification
   // failed — retrying cannot recover. The workflow must treat it as fatal.

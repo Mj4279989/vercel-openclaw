@@ -3,13 +3,11 @@ import test from "node:test";
 
 import {
   OPENCLAW_BUNDLE_COMPATIBILITY_ERROR_CODE,
-  REQUIRED_BUNDLE_METADATA_ASSETS,
-  REQUIRED_DASHBOARD_BUNDLE_ASSETS,
   REQUIRED_MANIFEST_RECORDED_ASSETS,
   validateBundleAssetManifestForDashboard,
 } from "@/server/openclaw/bundle-compatibility";
 
-function manifest(assetNames = REQUIRED_MANIFEST_RECORDED_ASSETS) {
+function manifest(assetNames: readonly string[] = REQUIRED_MANIFEST_RECORDED_ASSETS) {
   return {
     schemaVersion: 1,
     name: "openclaw-sandbox-bundle",

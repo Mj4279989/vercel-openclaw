@@ -58,6 +58,26 @@ async function withTestEnv(fn: () => Promise<void>): Promise<void> {
 
 type FetchCall = { url: string; method: string; body: string | null };
 
+type DiscordEndpointConflictResponse = {
+  error: { code: string };
+  endpointConflict: {
+    endpointDrift: boolean;
+    repairHint: { method: "PUT"; forceOverwriteEndpoint: true };
+  };
+};
+
+type DiscordDiagnosticsResponse = {
+  diagnostics: {
+    currentEndpointUrl: string | null;
+    desiredEndpointUrl: string;
+    endpointDrift: boolean;
+    endpointConfigured: boolean | undefined;
+    commandRegistered: boolean;
+    commandId: string | null;
+    canRepairEndpoint: boolean;
+  };
+};
+
 function installDiscordFetch(options: {
   currentEndpoint?: string | null;
   commandStatus?: number;
@@ -121,7 +141,7 @@ test("PUT /api/channels/discord returns structured endpoint conflict without pat
       );
 
       assert.equal(result.status, 409);
-      const body = result.json as any;
+      const body = result.json as DiscordEndpointConflictResponse;
       assert.equal(body.error.code, "DISCORD_ENDPOINT_CONFLICT");
       assert.equal(body.endpointConflict.endpointDrift, true);
       assert.deepEqual(body.endpointConflict.repairHint, {
@@ -241,7 +261,7 @@ test("GET /api/channels/discord diagnostics returns stable drift state", async (
       );
 
       assert.equal(result.status, 200);
-      const body = result.json as any;
+      const body = result.json as DiscordDiagnosticsResponse;
       assert.equal(body.diagnostics.currentEndpointUrl, "https://old.example.com/api/channels/discord/webhook");
       assert.equal(body.diagnostics.desiredEndpointUrl, "https://openclaw.example/api/channels/discord/webhook");
       assert.equal(body.diagnostics.endpointDrift, true);

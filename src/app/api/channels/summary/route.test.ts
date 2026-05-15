@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createUnknownUserVisibleReply, type ChannelLastForward } from "@/shared/channels";
 import type { ChannelSummaryResponse } from "@/shared/channel-summary";
 import {
   _resetStoreForTesting,
@@ -24,6 +25,18 @@ import {
 } from "@/test-utils/route-caller";
 
 patchNextServerAfter();
+
+type ChannelLastForwardFixture = Omit<ChannelLastForward, "userVisibleReply"> & {
+  userVisibleReply?: ChannelLastForward["userVisibleReply"];
+};
+
+function createLastForwardFixture(input: ChannelLastForwardFixture): ChannelLastForward {
+  return {
+    ...input,
+    userVisibleReply:
+      input.userVisibleReply ?? createUnknownUserVisibleReply(input.completedAt),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Environment isolation
@@ -356,7 +369,7 @@ test("GET /api/channels/summary: WhatsApp separates link state from native and v
       };
       meta.channelDiagnostics = {
         whatsapp: {
-          lastForward: {
+          lastForward: createLastForwardFixture({
             ok: true,
             status: 200,
             classification: "accepted",
@@ -369,7 +382,7 @@ test("GET /api/channels/summary: WhatsApp separates link state from native and v
             startedAt: completedAt - 100,
             completedAt,
             deliveryId: "whatsapp:wamid-1",
-          } as any,
+          }),
         },
       };
     });
@@ -407,7 +420,7 @@ test("GET /api/channels/summary: native accepted Slack forward keeps user-visibl
       };
       meta.channelDiagnostics = {
         slack: {
-          lastForward: {
+          lastForward: createLastForwardFixture({
             ok: true,
             status: 200,
             classification: "accepted",
@@ -420,7 +433,7 @@ test("GET /api/channels/summary: native accepted Slack forward keeps user-visibl
             startedAt: completedAt - 100,
             completedAt,
             deliveryId: "delivery-1",
-          } as any,
+          }),
         },
       };
     });
@@ -461,7 +474,7 @@ test("GET /api/channels/summary: stale broken Slack forward does not override fr
       };
       meta.channelDiagnostics = {
         slack: {
-          lastForward: {
+          lastForward: createLastForwardFixture({
             ok: false,
             status: 502,
             classification: "sandbox-not-listening",
@@ -474,7 +487,7 @@ test("GET /api/channels/summary: stale broken Slack forward does not override fr
             startedAt: now - 10 * 60 * 1000 - 100,
             completedAt: now - 10 * 60 * 1000,
             deliveryId: "delivery-old",
-          } as any,
+          }),
         },
       };
     });
@@ -503,7 +516,7 @@ test("GET /api/channels/summary: legacy lastDeliveryState age follows lastForwar
       };
       meta.channelDiagnostics = {
         slack: {
-          lastForward: {
+          lastForward: createLastForwardFixture({
             ok: true,
             status: 200,
             classification: "accepted",
@@ -516,7 +529,7 @@ test("GET /api/channels/summary: legacy lastDeliveryState age follows lastForwar
             startedAt: completedAt - 100,
             completedAt,
             deliveryId: "delivery-legacy",
-          } as any,
+          }),
         },
       };
     });
@@ -544,7 +557,7 @@ test("GET /api/channels/summary: observed user-visible reply projects as verifie
       };
       meta.channelDiagnostics = {
         slack: {
-          lastForward: {
+          lastForward: createLastForwardFixture({
             ok: true,
             status: 200,
             classification: "accepted",
@@ -566,7 +579,7 @@ test("GET /api/channels/summary: observed user-visible reply projects as verifie
               reason: "operator-confirmed",
               evidence: null,
             },
-          },
+          }),
         },
       };
     });
@@ -601,7 +614,7 @@ test("GET /api/channels/summary: Discord separates route, native, and visible re
       };
       meta.channelDiagnostics = {
         discord: {
-          lastForward: {
+          lastForward: createLastForwardFixture({
             ok: true,
             status: 200,
             classification: "accepted",
@@ -614,7 +627,7 @@ test("GET /api/channels/summary: Discord separates route, native, and visible re
             startedAt: completedAt - 100,
             completedAt,
             deliveryId: "discord:interaction-1",
-          } as any,
+          }),
         },
       };
     });
@@ -714,7 +727,7 @@ test("GET /api/channels/summary: Discord observed visible reply is the final rea
       };
       meta.channelDiagnostics = {
         discord: {
-          lastForward: {
+          lastForward: createLastForwardFixture({
             ok: true,
             status: 200,
             classification: "accepted",
@@ -736,7 +749,7 @@ test("GET /api/channels/summary: Discord observed visible reply is the final rea
               reason: "interaction-edit-observed",
               evidence: { observer: "discord-interaction-edit" },
             },
-          },
+          }),
         },
       };
     });

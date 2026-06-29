@@ -3683,19 +3683,18 @@ echo ""
 export function buildPosSkill(): string {
   return `---
 name: pos-system
-description: Manage products, sales, customers, stock alerts, and generate/download reports on the Stocky POS system.
+description: Manage products, sales, customers, stock alerts, and generate receipt bills on the database.
 user-invocable: true
 metadata:
   openclaw:
     emoji: "📦"
     requires:
       bins: ["node"]
-      env: ["STOCKY_BASE_URL", "STOCKY_API_EMAIL", "STOCKY_API_PASSWORD"]
 ---
 
-# Stocky POS Management System
+# Direct DB POS Management System
 
-This skill allows the OpenClaw agent to query, create, update, and manage data on the Stocky POS system via CLI actions.
+This skill allows the OpenClaw agent to query, create, update, and manage data directly on the database via secure API actions.
 
 ## Run
 \`\`\`bash
@@ -3708,40 +3707,32 @@ node {baseDir}/scripts/pos.mjs --action [action_name] [arguments]
 - **List Products**: \`node {baseDir}/scripts/pos.mjs --action list-products [--limit LIMIT] [--page PAGE] [--search SEARCH]\`
 - **Get Product Details**: \`node {baseDir}/scripts/pos.mjs --action get-product --id ID\`
 - **Create Product**: \`node {baseDir}/scripts/pos.mjs --action create-product --data JSON_STRING\`
-  - Note: JSON_STRING requires: \`{"name": "...", "code": "...", "type": "is_single", "cost": 10, "price": 15, "category_id": 1, "unit_id": 1, "unit_sale_id": 1, "unit_purchase_id": 1, "stock_alert": 5}\`
+  - Note: JSON_STRING requires: \`{"name": "...", "code": "...", "type": "is_single", "cost": 10, "price": 15, "category_id": 1, "unit_id": 1, "quantity": 100, "stock_alert": 5}\`
 - **Update Product**: \`node {baseDir}/scripts/pos.mjs --action update-product --id ID --data JSON_STRING\`
 - **Delete Product**: \`node {baseDir}/scripts/pos.mjs --action delete-product --id ID\`
 
 ### 2. Customer Management
 - **List Customers**: \`node {baseDir}/scripts/pos.mjs --action list-customers [--limit LIMIT] [--page PAGE] [--search SEARCH]\`
 - **Create Customer**: \`node {baseDir}/scripts/pos.mjs --action create-customer --data JSON_STRING\`
-  - Note: JSON_STRING requires: \`{"name": "...", "email": "...", "phone": "...", "country": "...", "city": "...", "address": "..."}\`
+  - Note: JSON_STRING requires: \`{"name": "...", "email": "...", "phone": "...", "country": "...", "city": "...", "adresse": "..."}\`
 
 ### 3. Sales & POS Transactions
 - **List Sales**: \`node {baseDir}/scripts/pos.mjs --action list-sales [--limit LIMIT] [--page PAGE]\`
 - **Get Sale Details**: \`node {baseDir}/scripts/pos.mjs --action get-sale --id ID\`
 - **Create Sale (POS)**: \`node {baseDir}/scripts/pos.mjs --action create-sale --data JSON_STRING\`
   - Note: JSON_STRING structure:
-    \`{ "client_id": 1, "warehouse_id": 1, "TaxNet": 0, "tax_rate": 0, "discount": 0, "shipping": 0, "notes": "", "payment": { "status": "received", "Reglement": "Cash" }, "details": [ { "product_id": 1, "quantity": 2, "price": 15, "TaxNet": 0, "tax_method": "1", "discount": 0, "discount_Method": "1", "product_type": "is_single" } ] }\`
+    \`{ "client_id": 1, "warehouse_id": 1, "tax_rate": 0, "discount": 0, "shipping": 0, "notes": "", "payment": { "status": "received", "Reglement": "Cash" }, "details": [ { "product_id": 1, "quantity": 2, "price": 15, "discount": 0 } ] }\`
+  - Generates a beautifully styled HTML invoice printout automatically in sandbox \`/tmp/\` and registers the media path.
 
 ### 4. Reports & Analytics
 - **Dashboard Summary**: \`node {baseDir}/scripts/pos.mjs --action dashboard-summary\`
 - **Stock Alerts**: \`node {baseDir}/scripts/pos.mjs --action stock-alerts\`
-
-### 5. Document & Report Downloads (PDF/Images)
-- **Get Sale Invoice PDF**: \`node {baseDir}/scripts/pos.mjs --action get-sale-pdf --id ID\`
-- **Get Purchase PDF**: \`node {baseDir}/scripts/pos.mjs --action get-purchase-pdf --id ID\`
-- **Get Quotation PDF**: \`node {baseDir}/scripts/pos.mjs --action get-quote-pdf --id ID\`
-- **Get System Health PDF**: \`node {baseDir}/scripts/pos.mjs --action get-system-health-pdf\`
-
-For all PDF download commands, the system downloads the PDF report file to the sandbox's \`/tmp/\` directory and prints the \`MEDIA:/tmp/filename.pdf\` path. OpenClaw intercepts this and renders a download/preview link in the chat automatically.
 `;
 }
 
 export function buildPosScript(): string {
   return `import { parseArgs } from "node:util";
 import { writeFile } from "node:fs/promises";
-import crypto from "node:crypto";
 
 const { values } = parseArgs({
   options: {
@@ -3760,59 +3751,197 @@ if (!action) {
   process.exit(1);
 }
 
-const baseUrl = process.env.STOCKY_BASE_URL?.trim();
-const email = process.env.STOCKY_API_EMAIL?.trim();
-const password = process.env.STOCKY_API_PASSWORD?.trim();
+const apiUrl = (process.env.OPENCLAW_API_URL || "").trim();
+const gatewayToken = (process.env.OPENCLAW_GATEWAY_TOKEN || "").trim();
 
-if (!baseUrl || !email || !password) {
-  console.error("Error: STOCKY_BASE_URL, STOCKY_API_EMAIL, and STOCKY_API_PASSWORD must be configured.");
+if (!apiUrl || !gatewayToken) {
+  console.error("Error: OPENCLAW_API_URL and OPENCLAW_GATEWAY_TOKEN must be configured.");
   process.exit(1);
 }
 
-async function getAccessToken() {
-  const loginUrl = \`\${baseUrl.replace(/\\/+$/, "")}/api/getAccessToken\`;
-  const res = await fetch(loginUrl, {
+async function apiFetch(actionName, payload = {}) {
+  const url = apiUrl.replace(/\\/+$/, "") + "/api/pos-db";
+  const res = await fetch(url, {
     method: "POST",
     headers: {
+      "Authorization": "Bearer " + gatewayToken,
       "Content-Type": "application/json",
       "Accept": "application/json",
     },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ action: actionName, data: payload }),
   });
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(\`Authentication failed (\${res.status}): \${errText}\`);
-  }
-  const data = await res.json();
-  if (!data.Stocky_token) {
-    throw new Error("No Stocky_token returned in auth response.");
-  }
-  return data.Stocky_token;
-}
-
-async function apiFetch(path, options = {}) {
-  const token = await getAccessToken();
-  const url = \`\${baseUrl.replace(/\\/+$/, "")}\${path}\`;
-  const headers = {
-    "Authorization": \`Bearer \${token}\`,
-    "Accept": "application/json",
-    ...(options.body ? { "Content-Type": "application/json" } : {}),
-    ...options.headers,
-  };
-  const res = await fetch(url, { ...options, headers });
-  if (!res.ok) {
     const text = await res.text();
-    throw new Error(\`API request to \${path} failed (\${res.status}): \${text}\`);
+    throw new Error("API request failed (" + res.status + "): " + text);
   }
   return res;
 }
 
-async function downloadReport(path, filename) {
-  const res = await apiFetch(path);
-  const buffer = await res.arrayBuffer();
-  const filePath = \`/tmp/\${filename}\`;
-  await writeFile(filePath, Buffer.from(buffer));
-  console.log(\`MEDIA:\${filePath}\`);
+function generateReceiptHtml(sale, details) {
+  let itemsHtml = "";
+  for (const item of details) {
+    itemsHtml += "<tr>" +
+      "<td style=\\"padding: 6px 0;\\">" + item.product_name + "<br/><span style=\\"font-size: 11px; color: #666;\\">" + item.product_code + "</span></td>" +
+      "<td style=\\"text-align: center; padding: 6px 0;\\">" + parseFloat(item.quantity).toFixed(0) + "</td>" +
+      "<td style=\\"text-align: right; padding: 6px 0;\\">$" + parseFloat(item.price).toFixed(2) + "</td>" +
+      "<td style=\\"text-align: right; padding: 6px 0;\\">$" + parseFloat(item.total).toFixed(2) + "</td>" +
+      "</tr>";
+  }
+
+  const discount = parseFloat(sale.discount || 0);
+  const shipping = parseFloat(sale.shipping || 0);
+  const subtotal = parseFloat(sale.GrandTotal || 0) + discount - shipping;
+
+  let phoneRow = "";
+  if (sale.client_phone) {
+    phoneRow = "<tr><td><strong>Phone:</strong></td><td style=\\"text-align: right;\\">" + sale.client_phone + "</td></tr>";
+  }
+
+  return "<!DOCTYPE html>\\n" +
+"<html>\\n" +
+"<head>\\n" +
+"  <meta charset=\\"utf-8\\">\\n" +
+"  <title>Invoice - " + sale.Ref + "</title>\\n" +
+"  <style>\\n" +
+"    body {\\n" +
+"      font-family: 'Courier New', Courier, monospace;\\n" +
+"      color: #000;\\n" +
+"      background: #fff;\\n" +
+"      margin: 0;\\n" +
+"      padding: 20px;\\n" +
+"      font-size: 14px;\\n" +
+"    }\\n" +
+"    .receipt {\\n" +
+"      max-width: 380px;\\n" +
+"      margin: 0 auto;\\n" +
+"      padding: 15px;\\n" +
+"      border: 1px dashed #ccc;\\n" +
+"    }\\n" +
+"    .header {\\n" +
+"      text-align: center;\\n" +
+"      margin-bottom: 20px;\\n" +
+"    }\\n" +
+"    .header h2 {\\n" +
+"      margin: 0 0 5px 0;\\n" +
+"      font-size: 20px;\\n" +
+"      letter-spacing: 1px;\\n" +
+"    }\\n" +
+"    .header p {\\n" +
+"      margin: 0;\\n" +
+"      font-size: 12px;\\n" +
+"      color: #555;\\n" +
+"    }\\n" +
+"    .info {\\n" +
+"      margin-bottom: 15px;\\n" +
+"      border-bottom: 1px dashed #000;\\n" +
+"      padding-bottom: 10px;\\n" +
+"      font-size: 12px;\\n" +
+"      line-height: 1.4;\\n" +
+"    }\\n" +
+"    .info table {\\n" +
+"      width: 100%;\\n" +
+"    }\\n" +
+"    .items-table {\\n" +
+"      width: 100%;\\n" +
+"      border-collapse: collapse;\\n" +
+"      margin-bottom: 15px;\\n" +
+"    }\\n" +
+"    .items-table th {\\n" +
+"      border-bottom: 1px solid #000;\\n" +
+"      padding-bottom: 5px;\\n" +
+"      font-size: 12px;\\n" +
+"      }... (some lines truncated for length, maintaining full document integrity) ...\\n" +
+"    .items-table td {\\n" +
+"      font-size: 13px;\\n" +
+"    }\\n" +
+"    .totals {\\n" +
+"      border-top: 1px dashed #000;\\n" +
+"      padding-top: 10px;\\n" +
+"      margin-bottom: 20px;\\n" +
+"      font-size: 13px;\\n" +
+"    }\\n" +
+"    .totals table {\\n" +
+"      width: 100%;\\n" +
+"    }\\n" +
+"    .totals td {\\n" +
+"      padding: 3px 0;\\n" +
+"    }\\n" +
+"    .totals .grand-total {\\n" +
+"      font-weight: bold;\\n" +
+"      font-size: 15px;\\n" +
+"      border-top: 1px solid #000;\\n" +
+"      padding-top: 6px;\\n" +
+"      }\\n" +
+"    .footer {\\n" +
+"      text-align: center;\\n" +
+"      font-size: 12px;\\n" +
+"      margin-top: 25px;\\n" +
+"      border-top: 1px dashed #ccc;\\n" +
+"      padding-top: 15px;\\n" +
+"    }\\n" +
+"  </style>\\n" +
+"</head>\\n" +
+"<body>\\n" +
+"  <div class=\\"receipt\\">\\n" +
+"    <div class=\\"header\\">\\n" +
+"      <h2>VENZURES POS</h2>\\n" +
+"      <p>Smart Inventory & Sales System</p>\\n" +
+"    </div>\\n" +
+"    <div class=\\"info\\">\\n" +
+"      <table>\\n" +
+"        <tr>\\n" +
+"          <td><strong>Invoice Ref:</strong></td>\\n" +
+"          <td style=\\"text-align: right;\\">" + sale.Ref + "</td>\\n" +
+"        </tr>\\n" +
+"        <tr>\\n" +
+"          <td><strong>Date:</strong></td>\\n" +
+"          <td style=\\"text-align: right;\\">" + new Date(sale.date).toLocaleDateString() + "</td>\\n" +
+"        </tr>\\n" +
+"        <tr>\\n" +
+"          <td><strong>Customer:</strong></td>\\n" +
+"          <td style=\\"text-align: right;\\">" + (sale.client_name || "Walk-in Customer") + "</td>\\n" +
+"        </tr>\\n" +
+"        " + phoneRow + "\\n" +
+"        <tr>\\n" +
+"          <td><strong>Warehouse:</strong></td>\\n" +
+"          <td style=\\"text-align: right;\\">" + (sale.warehouse_name || "Main Warehouse") + "</td>\\n" +
+"        </tr>\\n" +
+"      </table>\\n" +
+"    </div>\\n" +
+"    <table class=\\"items-table\\">\\n" +
+"      <thead>\\n" +
+"        <tr>\\n" +
+"          <th style=\\"text-align: left;\\">Item</th>\\n" +
+"          <th style=\\"text-align: center; width: 40px;\\">Qty</th>\\n" +
+"          <th style=\\"text-align: right; width: 70px;\\">Price</th>\\n" +
+"          <th style=\\"text-align: right; width: 70px;\\">Total</th>\\n" +
+"        </tr>\\n" +
+"      </thead>\\n" +
+"      <tbody>\\n" +
+"        " + itemsHtml + "\\n" +
+"      </tbody>\\n" +
+"    </table>\\n" +
+"    <div class=\\"totals\\">\\n" +
+"      <table>\\n" +
+"        <tr>\\n" +
+"          <td>Subtotal:</td>\\n" +
+"          <td style=\\"text-align: right;\\">$" + subtotal.toFixed(2) + "</td>\\n" +
+"        </tr>\\n" +
+"        " + (discount > 0 ? "<tr><td>Discount:</td><td style=\\"text-align: right;\\">-$" + discount.toFixed(2) + "</td></tr>" : "") + "\\n" +
+"        " + (shipping > 0 ? "<tr><td>Shipping:</td><td style=\\"text-align: right;\\">$" + shipping.toFixed(2) + "</td></tr>" : "") + "\\n" +
+"        <tr class=\\"grand-total\\">\\n" +
+"          <td><strong>Grand Total:</strong></td>\\n" +
+"          <td style=\\"text-align: right;\\"><strong>$" + parseFloat(sale.GrandTotal).toFixed(2) + "</strong></td>\\n" +
+"        </tr>\\n" +
+"      </table>\\n" +
+"    </div>\\n" +
+"    <div class=\\"footer\\">\\n" +
+"      <p>Thank you for your purchase!</p>\\n" +
+"      <p style=\\"font-size: 10px; color: #777;\\">Powered by OpenClaw AI POS</p>\\n" +
+"    </div>\\n" +
+"  </div>\\n" +
+"</body>\\n" +
+"</html>";
 }
 
 try {
@@ -3821,14 +3950,14 @@ try {
       const limit = values.limit || "10";
       const page = values.page || "1";
       const search = values.search || "";
-      const res = await apiFetch(\`/api/products?limit=\${limit}&page=\${page}&search=\${search}\`);
+      const res = await apiFetch("list-products", { limit, page, search });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
     }
     case "get-product": {
       if (!values.id) throw new Error("--id is required");
-      const res = await apiFetch(\`/api/products/\${values.id}\`);
+      const res = await apiFetch("get-product", { id: values.id });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
@@ -3836,10 +3965,7 @@ try {
     case "create-product": {
       if (!values.data) throw new Error("--data (JSON string) is required");
       const payload = JSON.parse(values.data);
-      const res = await apiFetch("/api/products", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const res = await apiFetch("create-product", { data: payload });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
@@ -3848,19 +3974,14 @@ try {
       if (!values.id) throw new Error("--id is required");
       if (!values.data) throw new Error("--data (JSON string) is required");
       const payload = JSON.parse(values.data);
-      const res = await apiFetch(\`/api/products/\${values.id}\`, {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      });
+      const res = await apiFetch("update-product", { id: values.id, data: payload });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
     }
     case "delete-product": {
       if (!values.id) throw new Error("--id is required");
-      const res = await apiFetch(\`/api/products/\${values.id}\`, {
-        method: "DELETE",
-      });
+      const res = await apiFetch("delete-product", { id: values.id });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
@@ -3868,14 +3989,14 @@ try {
     case "list-sales": {
       const limit = values.limit || "10";
       const page = values.page || "1";
-      const res = await apiFetch(\`/api/sales?limit=\${limit}&page=\${page}\`);
+      const res = await apiFetch("list-sales", { limit, page });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
     }
     case "get-sale": {
       if (!values.id) throw new Error("--id is required");
-      const res = await apiFetch(\`/api/sales/\${values.id}\`);
+      const res = await apiFetch("get-sale", { id: values.id });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
@@ -3883,22 +4004,26 @@ try {
     case "create-sale": {
       if (!values.data) throw new Error("--data (JSON string) is required");
       const payload = JSON.parse(values.data);
-      if (!payload.sale_uuid) {
-        payload.sale_uuid = crypto.randomUUID();
-      }
-      const res = await apiFetch("/api/pos/create_pos", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const res = await apiFetch("create-sale", { data: payload });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
+
+      // Generate a beautiful bill file and print media path
+      const { sale, details } = data;
+      if (sale && details) {
+        const receiptHtml = generateReceiptHtml(sale, details);
+        const filename = "receipt_" + (sale.Ref || sale.id) + ".html";
+        const filePath = "/tmp/" + filename;
+        await writeFile(filePath, receiptHtml);
+        console.log("MEDIA:" + filename);
+      }
       break;
     }
     case "list-customers": {
       const limit = values.limit || "10";
       const page = values.page || "1";
       const search = values.search || "";
-      const res = await apiFetch(\`/api/clients?limit=\${limit}&page=\${page}&search=\${search}\`);
+      const res = await apiFetch("list-customers", { limit, page, search });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
@@ -3906,47 +4031,25 @@ try {
     case "create-customer": {
       if (!values.data) throw new Error("--data (JSON string) is required");
       const payload = JSON.parse(values.data);
-      const res = await apiFetch("/api/clients", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const res = await apiFetch("create-customer", { data: payload });
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
     }
     case "dashboard-summary": {
-      const res = await apiFetch("/api/dashboard_data");
+      const res = await apiFetch("dashboard-summary");
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
     }
     case "stock-alerts": {
-      const res = await apiFetch("/api/get_products_stock_alerts");
+      const res = await apiFetch("stock-alerts");
       const data = await res.json();
       console.log(JSON.stringify(data, null, 2));
       break;
     }
-    case "get-sale-pdf": {
-      if (!values.id) throw new Error("--id is required");
-      await downloadReport(\`/api/sale_pdf/\${values.id}\`, \`sale_\${values.id}.pdf\`);
-      break;
-    }
-    case "get-purchase-pdf": {
-      if (!values.id) throw new Error("--id is required");
-      await downloadReport(\`/api/purchase_pdf/\${values.id}\`, \`purchase_\${values.id}.pdf\`);
-      break;
-    }
-    case "get-quote-pdf": {
-      if (!values.id) throw new Error("--id is required");
-      await downloadReport(\`/api/quote_pdf/\${values.id}\`, \`quote_\${values.id}.pdf\`);
-      break;
-    }
-    case "get-system-health-pdf": {
-      await downloadReport("/api/system_health/pdf", "system_health.pdf");
-      break;
-    }
     default: {
-      console.error(\`Unknown action: \${action}\`);
+      console.error("Unknown action: " + action);
       process.exit(1);
     }
   }

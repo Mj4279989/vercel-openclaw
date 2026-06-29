@@ -186,6 +186,7 @@ export function buildDynamicRestoreFiles(options: {
 export type RestoreRuntimeEnvOptions = {
   gatewayToken: string;
   apiKey?: string;
+  origin?: string;
 };
 
 export function buildRestoreRuntimeEnv(
@@ -204,6 +205,7 @@ export function buildRestoreRuntimeEnv(
   // Fall back to OPENAI_API_KEY for direct OpenAI bypass.
   const gatewayKey = process.env.AI_GATEWAY_API_KEY?.trim();
   const directOpenAiKey = process.env.OPENAI_API_KEY?.trim();
+  const apiOrigin = options.origin || process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
   if (gatewayKey) {
     return {
@@ -211,6 +213,7 @@ export function buildRestoreRuntimeEnv(
       OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
       AI_GATEWAY_API_KEY: gatewayKey,
       OPENAI_API_KEY: gatewayKey,
+      OPENCLAW_API_URL: apiOrigin,
     };
   }
 
@@ -220,6 +223,7 @@ export function buildRestoreRuntimeEnv(
       OPENAI_BASE_URL: "https://api.openai.com/v1",
       AI_GATEWAY_API_KEY: directOpenAiKey,
       OPENAI_API_KEY: directOpenAiKey,
+      OPENCLAW_API_URL: apiOrigin,
     };
   }
 
@@ -228,6 +232,7 @@ export function buildRestoreRuntimeEnv(
     OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
     AI_GATEWAY_API_KEY: "sk-placeholder-injected-via-network-policy",
     OPENAI_API_KEY: "sk-placeholder-injected-via-network-policy",
+    OPENCLAW_API_URL: apiOrigin,
   };
 }
 

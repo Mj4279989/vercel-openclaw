@@ -3306,6 +3306,7 @@ async function createAndBootstrapSandboxWithinLifecycleLock(
       const restoreEnv = buildRestoreRuntimeEnv({
         gatewayToken: latest.gatewayToken,
         apiKey: freshApiKey,
+        origin,
       });
 
       const assetSyncStart = Date.now();

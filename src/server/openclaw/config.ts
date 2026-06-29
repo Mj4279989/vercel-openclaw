@@ -75,6 +75,8 @@ export const OPENCLAW_WORKER_SANDBOX_SKILL_PATH = `${OPENCLAW_STATE_DIR}/skills/
 export const OPENCLAW_WORKER_SANDBOX_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/worker-sandbox/scripts/execute.mjs`;
 export const OPENCLAW_WORKER_SANDBOX_BATCH_SKILL_PATH = `${OPENCLAW_STATE_DIR}/skills/worker-sandbox-batch/SKILL.md`;
 export const OPENCLAW_WORKER_SANDBOX_BATCH_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/worker-sandbox-batch/scripts/execute-batch.mjs`;
+export const OPENCLAW_POS_SKILL_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/SKILL.md`;
+export const OPENCLAW_POS_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/scripts/pos.mjs`;
 
 // The built-in skill shipped with the openclaw npm package uses a Python
 // gen.py script that requires a direct sk-* OPENAI_API_KEY.  We overwrite
@@ -280,37 +282,36 @@ function buildGatewayPortProfileShell(): string {
  * Exits non-zero when the gateway token is missing or empty.
  */
 function buildGatewayEnvShell(): string {
+  const directOpenAiKey = process.env.OPENAI_API_KEY?.trim();
+  const openAiBaseUrl = directOpenAiKey ? "https://api.openai.com/v1" : AI_GATEWAY_BASE_URL;
+  const providerPluginIds = directOpenAiKey ? "openai" : "vercel-ai-gateway";
+
   return [
     `gateway_token="$(cat "${OPENCLAW_GATEWAY_TOKEN_PATH}" 2>/dev/null || true)"`,
     'if [ -z "$gateway_token" ]; then',
     '  echo \'{"event":"gateway_env.error","reason":"empty_gateway_token"}\' >&2',
     "  exit 1",
     "fi",
-    // AI_GATEWAY_API_KEY: placeholder — real credential injected via network
-    // policy header transform at the firewall layer (never enters the VM).
-    // OpenClaw needs a non-empty value to bootstrap its auth-profiles provider.
-    'export AI_GATEWAY_API_KEY="sk-placeholder-injected-via-network-policy"',
-    'export OPENAI_API_KEY="$AI_GATEWAY_API_KEY"',
+    // Read key from disk file (written during bootstrap/restore with real key).
+    // Falls back to any key already in the environment (set by fast-restore via restoreEnv),
+    // then to the placeholder as last resort.
+    `_key_from_file="$(cat "${OPENCLAW_AI_GATEWAY_API_KEY_PATH}" 2>/dev/null || true)"`,
+    'if [ "$_key_from_file" = "sk-placeholder-injected-via-network-policy" ]; then _key_from_file=""; fi',
+    `export AI_GATEWAY_API_KEY="\${_key_from_file:-\${AI_GATEWAY_API_KEY:-sk-placeholder-injected-via-network-policy}}"`,
+    `export OPENAI_API_KEY="\${_key_from_file:-\${OPENAI_API_KEY:-\$AI_GATEWAY_API_KEY}}"`,
     `export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH}"`,
     `export OPENCLAW_GATEWAY_PORT="${OPENCLAW_PORT}"`,
     'export OPENCLAW_GATEWAY_TOKEN="$gateway_token"',
-    `export OPENAI_BASE_URL="${AI_GATEWAY_BASE_URL}"`,
-    // Limit provider discovery to vercel-ai-gateway only.  OpenClaw v2026.4.11+
-    // runs prewarmConfiguredPrimaryModel before channel startup, which discovers
-    // all 27 provider plugins sequentially.  Each plugin's catalog fetch can
-    // time out, blocking Telegram/Slack startup by 28+ seconds.  Restricting
-    // discovery to the single provider we use eliminates the delay.
-    'export OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS="vercel-ai-gateway"',
+    `export OPENAI_BASE_URL="${openAiBaseUrl}"`,
+    `export OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS="${providerPluginIds}"`,
     'export OPENCLAW_DISABLE_BONJOUR="1"',
-    // Bundle-mode plugin discovery: point the loader at the extracted
-    // channels tarball. Harmless in npm-install mode (the directory simply
-    // doesn't exist; the loader falls back to package-root resolution).
     ...(isUsingBundle()
       ? [`export OPENCLAW_BUNDLED_PLUGINS_DIR="${OPENCLAW_BUNDLED_PLUGINS_DIR_PATH}"`]
       : []),
     `export NODE_OPTIONS="\${NODE_OPTIONS:-} --require=${OPENCLAW_NET_LEARN_PATH}"`,
   ].join("\n");
 }
+
 
 /**
  * Shell fragment that writes the Node.js network-learning module to disk.
@@ -574,52 +575,36 @@ export function buildGatewayConfig(
   config.agents = {
     defaults: {
       model: {
-        primary: "vercel-ai-gateway/anthropic/claude-sonnet-4.6",
+        primary: "openai/gpt-4o",
         fallbacks: [
-          "vercel-ai-gateway/openai/gpt-5.3-chat",
-          "vercel-ai-gateway/anthropic/claude-haiku-4.5",
-          "vercel-ai-gateway/openai/gpt-5.2",
-          "vercel-ai-gateway/google/gemini-2.5-flash",
+          "openai/gpt-4o-mini",
         ],
       },
       models: {
-        // Anthropic
-        "vercel-ai-gateway/anthropic/claude-opus-4.6": { alias: "Claude Opus 4.6" },
-        "vercel-ai-gateway/anthropic/claude-sonnet-4.6": { alias: "Claude Sonnet 4.6" },
-        "vercel-ai-gateway/anthropic/claude-haiku-4.5": { alias: "Claude Haiku 4.5" },
-        // OpenAI
-        "vercel-ai-gateway/openai/gpt-5.3-chat": { alias: "GPT-5.3 Chat" },
-        "vercel-ai-gateway/openai/gpt-5.2": { alias: "GPT-5.2" },
-        "vercel-ai-gateway/openai/gpt-5-mini": { alias: "GPT-5 Mini" },
-        "vercel-ai-gateway/openai/o3": { alias: "o3" },
-        "vercel-ai-gateway/openai/o4-mini": { alias: "o4-mini" },
-        // Google
-        "vercel-ai-gateway/google/gemini-2.5-pro": { alias: "Gemini 2.5 Pro" },
-        "vercel-ai-gateway/google/gemini-2.5-flash": { alias: "Gemini 2.5 Flash" },
-        "vercel-ai-gateway/google/gemini-3-flash": { alias: "Gemini 3 Flash" },
-        "vercel-ai-gateway/google/gemini-3.1-flash-image-preview": { alias: "Gemini 3.1 Flash Image" },
-        // DeepSeek
-        "vercel-ai-gateway/deepseek/deepseek-v3.2": { alias: "DeepSeek V3.2" },
-        "vercel-ai-gateway/deepseek/deepseek-v3.2-thinking": { alias: "DeepSeek V3.2 Thinking" },
-        // xAI
-        "vercel-ai-gateway/xai/grok-4": { alias: "Grok 4" },
-        // Mistral
-        "vercel-ai-gateway/mistral/mistral-large-3": { alias: "Mistral Large 3" },
-        "vercel-ai-gateway/mistral/devstral-2": { alias: "Devstral 2" },
+        "openai/gpt-4o": { alias: "GPT-4o" },
+        "openai/gpt-4o-mini": { alias: "GPT-4o Mini" },
+        "openai/o4-mini": { alias: "o4-mini" },
+        "openai/o3": { alias: "o3" },
       },
     },
   };
+  const openAiBaseUrl = process.env.AI_GATEWAY_API_KEY?.trim()
+    ? AI_GATEWAY_BASE_URL
+    : (process.env.OPENAI_API_KEY?.trim() ? "https://api.openai.com/v1" : AI_GATEWAY_BASE_URL);
   config.models = {
     mode: "merge",
     providers: {
       openai: {
-        baseUrl: AI_GATEWAY_BASE_URL,
+        baseUrl: openAiBaseUrl,
         apiKey: "sk-placeholder",
         api: "openai-completions",
         models: [
           { id: "gpt-image-1", name: "GPT Image 1" },
           { id: "dall-e-3", name: "DALL-E 3" },
           { id: "gpt-4o", name: "GPT-4o", input: ["text", "image"] },
+          { id: "gpt-4o-mini", name: "GPT-4o Mini" },
+          { id: "gpt-4.1", name: "GPT-4.1" },
+          { id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
           { id: "gpt-4o-mini-tts", name: "GPT-4o Mini TTS" },
           { id: "text-embedding-3-small", name: "Text Embedding 3 Small" },
           { id: "text-embedding-3-large", name: "Text Embedding 3 Large" },
@@ -3692,5 +3677,282 @@ else
 fi
 
 echo ""
+`;
+}
+
+export function buildPosSkill(): string {
+  return `---
+name: pos-system
+description: Manage products, sales, customers, stock alerts, and generate/download reports on the Stocky POS system.
+user-invocable: true
+metadata:
+  openclaw:
+    emoji: "📦"
+    requires:
+      bins: ["node"]
+      env: ["STOCKY_BASE_URL", "STOCKY_API_EMAIL", "STOCKY_API_PASSWORD"]
+---
+
+# Stocky POS Management System
+
+This skill allows the OpenClaw agent to query, create, update, and manage data on the Stocky POS system via CLI actions.
+
+## Run
+\`\`\`bash
+node {baseDir}/scripts/pos.mjs --action [action_name] [arguments]
+\`\`\`
+
+## Commands & Actions
+
+### 1. Catalog Management
+- **List Products**: \`node {baseDir}/scripts/pos.mjs --action list-products [--limit LIMIT] [--page PAGE] [--search SEARCH]\`
+- **Get Product Details**: \`node {baseDir}/scripts/pos.mjs --action get-product --id ID\`
+- **Create Product**: \`node {baseDir}/scripts/pos.mjs --action create-product --data JSON_STRING\`
+  - Note: JSON_STRING requires: \`{"name": "...", "code": "...", "type": "is_single", "cost": 10, "price": 15, "category_id": 1, "unit_id": 1, "unit_sale_id": 1, "unit_purchase_id": 1, "stock_alert": 5}\`
+- **Update Product**: \`node {baseDir}/scripts/pos.mjs --action update-product --id ID --data JSON_STRING\`
+- **Delete Product**: \`node {baseDir}/scripts/pos.mjs --action delete-product --id ID\`
+
+### 2. Customer Management
+- **List Customers**: \`node {baseDir}/scripts/pos.mjs --action list-customers [--limit LIMIT] [--page PAGE] [--search SEARCH]\`
+- **Create Customer**: \`node {baseDir}/scripts/pos.mjs --action create-customer --data JSON_STRING\`
+  - Note: JSON_STRING requires: \`{"name": "...", "email": "...", "phone": "...", "country": "...", "city": "...", "address": "..."}\`
+
+### 3. Sales & POS Transactions
+- **List Sales**: \`node {baseDir}/scripts/pos.mjs --action list-sales [--limit LIMIT] [--page PAGE]\`
+- **Get Sale Details**: \`node {baseDir}/scripts/pos.mjs --action get-sale --id ID\`
+- **Create Sale (POS)**: \`node {baseDir}/scripts/pos.mjs --action create-sale --data JSON_STRING\`
+  - Note: JSON_STRING structure:
+    \`{ "client_id": 1, "warehouse_id": 1, "TaxNet": 0, "tax_rate": 0, "discount": 0, "shipping": 0, "notes": "", "payment": { "status": "received", "Reglement": "Cash" }, "details": [ { "product_id": 1, "quantity": 2, "price": 15, "TaxNet": 0, "tax_method": "1", "discount": 0, "discount_Method": "1", "product_type": "is_single" } ] }\`
+
+### 4. Reports & Analytics
+- **Dashboard Summary**: \`node {baseDir}/scripts/pos.mjs --action dashboard-summary\`
+- **Stock Alerts**: \`node {baseDir}/scripts/pos.mjs --action stock-alerts\`
+
+### 5. Document & Report Downloads (PDF/Images)
+- **Get Sale Invoice PDF**: \`node {baseDir}/scripts/pos.mjs --action get-sale-pdf --id ID\`
+- **Get Purchase PDF**: \`node {baseDir}/scripts/pos.mjs --action get-purchase-pdf --id ID\`
+- **Get Quotation PDF**: \`node {baseDir}/scripts/pos.mjs --action get-quote-pdf --id ID\`
+- **Get System Health PDF**: \`node {baseDir}/scripts/pos.mjs --action get-system-health-pdf\`
+
+For all PDF download commands, the system downloads the PDF report file to the sandbox's \`/tmp/\` directory and prints the \`MEDIA:/tmp/filename.pdf\` path. OpenClaw intercepts this and renders a download/preview link in the chat automatically.
+`;
+}
+
+export function buildPosScript(): string {
+  return `import { parseArgs } from "node:util";
+import { writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
+
+const { values } = parseArgs({
+  options: {
+    action: { type: "string" },
+    id: { type: "string" },
+    data: { type: "string" },
+    limit: { type: "string" },
+    page: { type: "string" },
+    search: { type: "string" },
+  },
+});
+
+const action = values.action;
+if (!action) {
+  console.error("Error: --action is required.");
+  process.exit(1);
+}
+
+const baseUrl = process.env.STOCKY_BASE_URL?.trim();
+const email = process.env.STOCKY_API_EMAIL?.trim();
+const password = process.env.STOCKY_API_PASSWORD?.trim();
+
+if (!baseUrl || !email || !password) {
+  console.error("Error: STOCKY_BASE_URL, STOCKY_API_EMAIL, and STOCKY_API_PASSWORD must be configured.");
+  process.exit(1);
+}
+
+async function getAccessToken() {
+  const loginUrl = \`\${baseUrl.replace(/\\/+$/, "")}/api/getAccessToken\`;
+  const res = await fetch(loginUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(\`Authentication failed (\${res.status}): \${errText}\`);
+  }
+  const data = await res.json();
+  if (!data.Stocky_token) {
+    throw new Error("No Stocky_token returned in auth response.");
+  }
+  return data.Stocky_token;
+}
+
+async function apiFetch(path, options = {}) {
+  const token = await getAccessToken();
+  const url = \`\${baseUrl.replace(/\\/+$/, "")}\${path}\`;
+  const headers = {
+    "Authorization": \`Bearer \${token}\`,
+    "Accept": "application/json",
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...options.headers,
+  };
+  const res = await fetch(url, { ...options, headers });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(\`API request to \${path} failed (\${res.status}): \${text}\`);
+  }
+  return res;
+}
+
+async function downloadReport(path, filename) {
+  const res = await apiFetch(path);
+  const buffer = await res.arrayBuffer();
+  const filePath = \`/tmp/\${filename}\`;
+  await writeFile(filePath, Buffer.from(buffer));
+  console.log(\`MEDIA:\${filePath}\`);
+}
+
+try {
+  switch (action) {
+    case "list-products": {
+      const limit = values.limit || "10";
+      const page = values.page || "1";
+      const search = values.search || "";
+      const res = await apiFetch(\`/api/products?limit=\${limit}&page=\${page}&search=\${search}\`);
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "get-product": {
+      if (!values.id) throw new Error("--id is required");
+      const res = await apiFetch(\`/api/products/\${values.id}\`);
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "create-product": {
+      if (!values.data) throw new Error("--data (JSON string) is required");
+      const payload = JSON.parse(values.data);
+      const res = await apiFetch("/api/products", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "update-product": {
+      if (!values.id) throw new Error("--id is required");
+      if (!values.data) throw new Error("--data (JSON string) is required");
+      const payload = JSON.parse(values.data);
+      const res = await apiFetch(\`/api/products/\${values.id}\`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "delete-product": {
+      if (!values.id) throw new Error("--id is required");
+      const res = await apiFetch(\`/api/products/\${values.id}\`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "list-sales": {
+      const limit = values.limit || "10";
+      const page = values.page || "1";
+      const res = await apiFetch(\`/api/sales?limit=\${limit}&page=\${page}\`);
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "get-sale": {
+      if (!values.id) throw new Error("--id is required");
+      const res = await apiFetch(\`/api/sales/\${values.id}\`);
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "create-sale": {
+      if (!values.data) throw new Error("--data (JSON string) is required");
+      const payload = JSON.parse(values.data);
+      if (!payload.sale_uuid) {
+        payload.sale_uuid = crypto.randomUUID();
+      }
+      const res = await apiFetch("/api/pos/create_pos", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "list-customers": {
+      const limit = values.limit || "10";
+      const page = values.page || "1";
+      const search = values.search || "";
+      const res = await apiFetch(\`/api/clients?limit=\${limit}&page=\${page}&search=\${search}\`);
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "create-customer": {
+      if (!values.data) throw new Error("--data (JSON string) is required");
+      const payload = JSON.parse(values.data);
+      const res = await apiFetch("/api/clients", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "dashboard-summary": {
+      const res = await apiFetch("/api/dashboard_data");
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "stock-alerts": {
+      const res = await apiFetch("/api/get_products_stock_alerts");
+      const data = await res.json();
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    }
+    case "get-sale-pdf": {
+      if (!values.id) throw new Error("--id is required");
+      await downloadReport(\`/api/sale_pdf/\${values.id}\`, \`sale_\${values.id}.pdf\`);
+      break;
+    }
+    case "get-purchase-pdf": {
+      if (!values.id) throw new Error("--id is required");
+      await downloadReport(\`/api/purchase_pdf/\${values.id}\`, \`purchase_\${values.id}.pdf\`);
+      break;
+    }
+    case "get-quote-pdf": {
+      if (!values.id) throw new Error("--id is required");
+      await downloadReport(\`/api/quote_pdf/\${values.id}\`, \`quote_\${values.id}.pdf\`);
+      break;
+    }
+    case "get-system-health-pdf": {
+      await downloadReport("/api/system_health/pdf", "system_health.pdf");
+      break;
+    }
+    default: {
+      console.error(\`Unknown action: \${action}\`);
+      process.exit(1);
+    }
+  }
+} catch (error) {
+  console.error("Execution Error: " + error.message);
+  process.exit(1);
+}
 `;
 }

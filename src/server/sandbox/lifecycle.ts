@@ -3997,20 +3997,54 @@ async function buildRuntimeEnv(): Promise<{ env?: Record<string, string> }> {
   // provides defense-in-depth by overwriting the Authorization header at the
   // firewall layer — even if OpenClaw sends a stale token, the transform
   // injects the fresh one.
-  const token = await getAiGatewayBearerTokenOptional();
-  if (!token) {
-    return {
-      env: {
-        OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
-      },
+  // Prefer AI_GATEWAY_API_KEY (Vercel gateway key) when set.
+  // Fall back to OPENAI_API_KEY for direct OpenAI bypass.
+  const gatewayKey = process.env.AI_GATEWAY_API_KEY?.trim();
+  const directOpenAiKey = process.env.OPENAI_API_KEY?.trim();
+
+  // Stocky POS integrations
+  const stockyBaseUrl = process.env.STOCKY_BASE_URL?.trim();
+  const stockyEmail = process.env.STOCKY_API_EMAIL?.trim();
+  const stockyPassword = process.env.STOCKY_API_PASSWORD?.trim();
+
+  const stockyEnv: Record<string, string> = {};
+  if (stockyBaseUrl) stockyEnv.STOCKY_BASE_URL = stockyBaseUrl;
+  if (stockyEmail) stockyEnv.STOCKY_API_EMAIL = stockyEmail;
+  if (stockyPassword) stockyEnv.STOCKY_API_PASSWORD = stockyPassword;
+
+  let baseEnv: Record<string, string> = {};
+
+  if (gatewayKey) {
+    baseEnv = {
+      AI_GATEWAY_API_KEY: gatewayKey,
+      OPENAI_API_KEY: gatewayKey,
+      OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
     };
+  } else if (directOpenAiKey) {
+    baseEnv = {
+      AI_GATEWAY_API_KEY: directOpenAiKey,
+      OPENAI_API_KEY: directOpenAiKey,
+      OPENAI_BASE_URL: "https://api.openai.com/v1",
+    };
+  } else {
+    const token = await getAiGatewayBearerTokenOptional();
+    if (token) {
+      baseEnv = {
+        AI_GATEWAY_API_KEY: token,
+        OPENAI_API_KEY: token,
+        OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
+      };
+    } else {
+      baseEnv = {
+        OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
+      };
+    }
   }
 
   return {
     env: {
-      AI_GATEWAY_API_KEY: token,
-      OPENAI_API_KEY: token,
-      OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
+      ...baseEnv,
+      ...stockyEnv,
     },
   };
 }

@@ -178,13 +178,25 @@ function wrapSandbox(sandbox: Sandbox): SandboxHandle {
 const realController: SandboxController = {
   async create(params) {
     const { Sandbox: SandboxClass } = await import("@vercel/sandbox");
-    // CreateParams is a simplified subset — cast to satisfy the SDK's union type.
-    const sandbox = await SandboxClass.create(params as Parameters<typeof SandboxClass.create>[0]);
+    const authParams = {
+      ...params,
+      ...(process.env.VERCEL_TOKEN ? { token: process.env.VERCEL_TOKEN } : {}),
+      ...(process.env.VERCEL_PROJECT_ID ? { projectId: process.env.VERCEL_PROJECT_ID } : {}),
+      ...(process.env.VERCEL_TEAM_ID ? { teamId: process.env.VERCEL_TEAM_ID } : {}),
+    };
+    const sandbox = await SandboxClass.create(authParams as Parameters<typeof SandboxClass.create>[0]);
     return wrapSandbox(sandbox);
   },
   async get(params) {
     const { Sandbox: SandboxClass } = await import("@vercel/sandbox");
-    const sandbox = await SandboxClass.get({ name: params.sandboxId, resume: params.resume });
+    const authParams = {
+      name: params.sandboxId,
+      resume: params.resume,
+      ...(process.env.VERCEL_TOKEN ? { token: process.env.VERCEL_TOKEN } : {}),
+      ...(process.env.VERCEL_PROJECT_ID ? { projectId: process.env.VERCEL_PROJECT_ID } : {}),
+      ...(process.env.VERCEL_TEAM_ID ? { teamId: process.env.VERCEL_TEAM_ID } : {}),
+    };
+    const sandbox = await SandboxClass.get(authParams as Parameters<typeof SandboxClass.get>[0]);
     return wrapSandbox(sandbox);
   },
 };

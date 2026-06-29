@@ -34,6 +34,8 @@ import {
   buildVisionSkill,
   buildWebSearchScript,
   buildWebSearchSkill,
+  buildPosScript,
+  buildPosSkill,
   OPENCLAW_BUILTIN_IMAGE_GEN_SCRIPT_PATH,
   OPENCLAW_BUILTIN_IMAGE_GEN_SKILL_PATH,
   OPENCLAW_CONFIG_PATH,
@@ -68,6 +70,8 @@ import {
   OPENCLAW_VISION_SKILL_PATH,
   OPENCLAW_WEB_SEARCH_SCRIPT_PATH,
   OPENCLAW_WEB_SEARCH_SKILL_PATH,
+  OPENCLAW_POS_SCRIPT_PATH,
+  OPENCLAW_POS_SKILL_PATH,
 } from "@/server/openclaw/config";
 
 export const OPENCLAW_RESTORE_ASSET_MANIFEST_PATH =
@@ -132,6 +136,8 @@ export function buildStaticRestoreFiles(): { path: string; content: Buffer }[] {
     { path: OPENCLAW_REASONING_SCRIPT_PATH, content: Buffer.from(buildReasoningScript()) },
     { path: OPENCLAW_COMPARE_SKILL_PATH, content: Buffer.from(buildCompareSkill()) },
     { path: OPENCLAW_COMPARE_SCRIPT_PATH, content: Buffer.from(buildCompareScript()) },
+    { path: OPENCLAW_POS_SKILL_PATH, content: Buffer.from(buildPosSkill()) },
+    { path: OPENCLAW_POS_SCRIPT_PATH, content: Buffer.from(buildPosScript()) },
     ...buildWorkerSandboxRestoreFiles(),
   ];
 }
@@ -155,6 +161,14 @@ export function buildDynamicRestoreFiles(options: {
           options.telegramWebhookSecret,
           options.whatsappConfig,
         ),
+      ),
+    },
+    {
+      path: OPENCLAW_AI_GATEWAY_API_KEY_PATH,
+      content: Buffer.from(
+        process.env.AI_GATEWAY_API_KEY?.trim() ??
+        process.env.OPENAI_API_KEY?.trim() ??
+        "sk-placeholder-injected-via-network-policy"
       ),
     },
   ];
@@ -186,6 +200,29 @@ export function buildRestoreRuntimeEnv(
   // transform at the firewall layer — it never enters the sandbox VM.
   // OpenClaw needs a non-empty AI_GATEWAY_API_KEY to bootstrap its
   // auth-profiles provider, so we pass a placeholder.
+  // Prefer AI_GATEWAY_API_KEY (Vercel gateway key) when set.
+  // Fall back to OPENAI_API_KEY for direct OpenAI bypass.
+  const gatewayKey = process.env.AI_GATEWAY_API_KEY?.trim();
+  const directOpenAiKey = process.env.OPENAI_API_KEY?.trim();
+
+  if (gatewayKey) {
+    return {
+      OPENCLAW_GATEWAY_TOKEN: options.gatewayToken,
+      OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
+      AI_GATEWAY_API_KEY: gatewayKey,
+      OPENAI_API_KEY: gatewayKey,
+    };
+  }
+
+  if (directOpenAiKey) {
+    return {
+      OPENCLAW_GATEWAY_TOKEN: options.gatewayToken,
+      OPENAI_BASE_URL: "https://api.openai.com/v1",
+      AI_GATEWAY_API_KEY: directOpenAiKey,
+      OPENAI_API_KEY: directOpenAiKey,
+    };
+  }
+
   return {
     OPENCLAW_GATEWAY_TOKEN: options.gatewayToken,
     OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
@@ -249,10 +286,6 @@ export function buildBootstrapFiles(
     {
       path: OPENCLAW_GATEWAY_TOKEN_PATH,
       content: Buffer.from(options.gatewayToken),
-    },
-    {
-      path: OPENCLAW_AI_GATEWAY_API_KEY_PATH,
-      content: Buffer.from("sk-placeholder-injected-via-network-policy"),
     },
     ...buildStaticRestoreFiles(),
     {

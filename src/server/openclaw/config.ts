@@ -4190,16 +4190,16 @@ def generate_receipt_html(sale, details):
         bg_color = "#ffffff" if idx % 2 == 0 else "#f9fafb"
         
         items_html += (
-            f"<tr style=\"border-bottom: 1px solid #e5e7eb; background: {bg_color};\">"
-            f"<td style=\"padding: 6px 5px; vertical-align: top;\">"
-            f"<div style=\"font-weight: 600; font-size: 8.5pt; color: #1f2937;\">{p_name}</div>"
-            f"<div style=\"font-size: 7pt; color: #6b7280;\">Code: {p_code}</div>"
+            f"<tr style='border-bottom: 1px solid #e5e7eb; background: {bg_color};'>"
+            f"<td style='padding: 6px 5px; vertical-align: top;'>"
+            f"<div style='font-weight: 600; font-size: 8.5pt; color: #1f2937;'>{p_name}</div>"
+            f"<div style='font-size: 7pt; color: #6b7280;'>Code: {p_code}</div>"
             "</td>"
-            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\">" + "$" + f" {price:.2f}</td>"
-            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\">{qty:.0f} pc</td>"
-            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #ef4444;\">" + "$" + f" {discount_net:.2f}</td>"
-            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\">" + "$" + f" {tax_net:.2f}</td>"
-            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 9pt; font-weight: bold; color: #1a56db;\">" + "$" + f" {total:.2f}</td>"
+            f"<td style='padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;'>" + "$" + f" {price:.2f}</td>"
+            f"<td style='padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;'>{qty:.0f} pc</td>"
+            f"<td style='padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #ef4444;'>" + "$" + f" {discount_net:.2f}</td>"
+            f"<td style='padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;'>" + "$" + f" {tax_net:.2f}</td>"
+            f"<td style='padding: 6px 5px; text-align: right; font-size: 9pt; font-weight: bold; color: #1a56db;'>" + "$" + f" {total:.2f}</td>"
             "</tr>"
         )
 

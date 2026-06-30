@@ -391,7 +391,7 @@ export async function POST(request: Request): Promise<Response> {
             const payRef = `INV_${String(nextPaymentId).padStart(5, "0")}`;
 
             await conn.query(
-              `INSERT INTO payment_sales (user_id, date, Ref, sale_id, Reglement, montant, change, created_at, updated_at)
+              `INSERT INTO payment_sales (user_id, date, Ref, sale_id, Reglement, montant, \`change\`, created_at, updated_at)
                VALUES (1, CURDATE(), ?, ?, ?, ?, 0, NOW(), NOW())`,
               [payRef, saleId, payload.payment?.Reglement || "Cash", paidAmount]
             );

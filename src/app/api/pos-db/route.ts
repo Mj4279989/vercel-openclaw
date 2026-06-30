@@ -390,10 +390,28 @@ export async function POST(request: Request): Promise<Response> {
             const nextPaymentId = (maxPaymentIdRow[0]?.max_id || 0) + 1;
             const payRef = `INV_${String(nextPaymentId).padStart(5, "0")}`;
 
+            const methodStr = (payload.payment?.Reglement || payload.payment?.method || "Cash").trim().toLowerCase();
+            let paymentMethodId = 2; // Default to Cash (ID: 2)
+            if (methodStr.includes("credit") || methodStr.includes("card")) {
+              paymentMethodId = 1;
+            } else if (methodStr.includes("cash")) {
+              paymentMethodId = 2;
+            } else if (methodStr.includes("check")) {
+              paymentMethodId = 3;
+            } else if (methodStr.includes("tpe")) {
+              paymentMethodId = 4;
+            } else if (methodStr.includes("western") || methodStr.includes("union")) {
+              paymentMethodId = 5;
+            } else if (methodStr.includes("transfer") || methodStr.includes("bank")) {
+              paymentMethodId = 6;
+            } else if (methodStr.includes("other")) {
+              paymentMethodId = 7;
+            }
+
             await conn.query(
-              `INSERT INTO payment_sales (user_id, date, Ref, sale_id, Reglement, montant, \`change\`, created_at, updated_at)
+              `INSERT INTO payment_sales (user_id, date, Ref, sale_id, payment_method_id, montant, \`change\`, created_at, updated_at)
                VALUES (1, CURDATE(), ?, ?, ?, ?, 0, NOW(), NOW())`,
-              [payRef, saleId, payload.payment?.Reglement || "Cash", paidAmount]
+              [payRef, saleId, paymentMethodId, paidAmount]
             );
           }
 

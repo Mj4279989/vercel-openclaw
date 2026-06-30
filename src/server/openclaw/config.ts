@@ -4471,12 +4471,17 @@ def main():
         details = data.get("details")
         if sale and details:
             try:
+                import base64
                 receipt_html = generate_receipt_html(sale, details)
                 filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".html"
                 filepath = "/tmp/" + filename
                 with open(filepath, "w") as f:
                     f.write(receipt_html)
                 print("MEDIA:" + filename)
+                
+                # Base64 encode for direct channel attachments (like Telegram files)
+                b64_data = base64.b64encode(receipt_html.encode("utf-8")).decode("utf-8")
+                print("MEDIA:data:text/html;name=" + filename + ";base64," + b64_data)
             except Exception as e:
                 print(f"Error generating receipt: {e}", file=sys.stderr)
 

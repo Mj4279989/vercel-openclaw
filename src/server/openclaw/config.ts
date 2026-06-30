@@ -3727,9 +3727,11 @@ python3 {baseDir}/scripts/pos.py --action [action_name] [arguments]
 ### 3. Sales & POS Transactions
 - **List Sales**: \`python3 {baseDir}/scripts/pos.py --action list-sales [--limit LIMIT] [--page PAGE]\`
 - **Get Sale Details**: \`python3 {baseDir}/scripts/pos.py --action get-sale --id ID\`
+  - **IMPORTANT**: When you run \`get-sale\`, the script outputs a \`MEDIA:data:application/pdf;name=...;base64,...\` line. You **MUST** echo this line exactly as a separate line at the end of your message to deliver the PDF invoice.
 - **Create Sale (POS)**: \`python3 {baseDir}/scripts/pos.py --action create-sale --data JSON_STRING\`
   - Note: JSON_STRING structure:
     \`{ "client_id": 1, "warehouse_id": 1, "tax_rate": 0, "discount": 0, "shipping": 0, "notes": "", "payment": { "status": "received", "Reglement": "Cash" }, "details": [ { "product_id": 1, "quantity": 2, "price": 15, "discount": 0 } ] }\`
+  - **IMPORTANT**: When you run \`create-sale\`, the script outputs a \`MEDIA:data:application/pdf;name=...;base64,...\` line. You **MUST** echo this line exactly as a separate line at the end of your message to deliver the PDF invoice.
 
 ### 4. Reports & Analytics
 - **Dashboard Summary**: \`python3 {baseDir}/scripts/pos.py --action dashboard-summary\` (use this to get total counts of products, sales, and customers)
@@ -4118,6 +4120,8 @@ Use \`--action create-sale\` and pass sale details in \`--data\`. The script aut
 python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action create-sale --data '{"client_id": CLIENT_ID, "warehouse_id": WAREHOUSE_ID, "tax_rate": 0, "discount": 0, "shipping": 0, "notes": "", "payment": {"status": "received", "Reglement": "Cash"}, "details": [{"product_id": PRODUCT_ID, "quantity": QTY, "price": PRICE, "discount": 0}]}'
 \`\`\`
 
+- **IMPORTANT**: When you run \`create-sale\` or \`get-sale\` action, the script outputs a line starting with \`MEDIA:data:application/pdf;\`. You **MUST** copy this line EXACTLY and VERBATIM as a separate line at the end of your response to the user. This is critical for the system to deliver the PDF invoice to the Telegram channel.
+
 ## Personality
 
 Be genuinely helpful. Skip filler phrases. Be resourceful before asking questions.
@@ -4186,16 +4190,16 @@ def generate_receipt_html(sale, details):
         bg_color = "#ffffff" if idx % 2 == 0 else "#f9fafb"
         
         items_html += (
-            f"<tr style=\\"border-bottom: 1px solid #e5e7eb; background: {bg_color};\\">"
-            f"<td style=\\"padding: 6px 5px; vertical-align: top;\\">"
-            f"<div style=\\"font-weight: 600; font-size: 8.5pt; color: #1f2937;\\">{p_name}</div>"
-            f"<div style=\\"font-size: 7pt; color: #6b7280;\\">Code: {p_code}</div>"
+            f"<tr style=\"border-bottom: 1px solid #e5e7eb; background: {bg_color};\">"
+            f"<td style=\"padding: 6px 5px; vertical-align: top;\">"
+            f"<div style=\"font-weight: 600; font-size: 8.5pt; color: #1f2937;\">{p_name}</div>"
+            f"<div style=\"font-size: 7pt; color: #6b7280;\">Code: {p_code}</div>"
             "</td>"
-            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\\">" + "$" + f" {price:.2f}</td>"
-            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\\">{qty:.0f} pc</td>"
-            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #ef4444;\\">" + "$" + f" {discount_net:.2f}</td>"
-            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\\">" + "$" + f" {tax_net:.2f}</td>"
-            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 9pt; font-weight: bold; color: #1a56db;\\">" + "$" + f" {total:.2f}</td>"
+            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\">" + "$" + f" {price:.2f}</td>"
+            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\">{qty:.0f} pc</td>"
+            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #ef4444;\">" + "$" + f" {discount_net:.2f}</td>"
+            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\">" + "$" + f" {tax_net:.2f}</td>"
+            f"<td style=\"padding: 6px 5px; text-align: right; font-size: 9pt; font-weight: bold; color: #1a56db;\">" + "$" + f" {total:.2f}</td>"
             "</tr>"
         )
 
@@ -4403,6 +4407,553 @@ def generate_receipt_html(sale, details):
     
     return html
 
+def generate_receipt_pdf_reportlab(sale, details, pdf_filepath, logo_path=None):
+    import os
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    
+    doc = SimpleDocTemplate(
+        pdf_filepath,
+        pagesize=A4,
+        leftMargin=30,
+        rightMargin=30,
+        topMargin=30,
+        bottomMargin=30
+    )
+    story = []
+    
+    styles = getSampleStyleSheet()
+    normal_style = styles['Normal']
+    
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=18,
+        leading=22,
+        textColor=colors.HexColor('#1a56db'),
+        alignment=2
+    )
+    
+    ref_style = ParagraphStyle(
+        'RefStyle',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor('#4b5563'),
+        alignment=2
+    )
+    
+    meta_label_style = ParagraphStyle(
+        'MetaLabel',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor('#6b7280'),
+        alignment=2
+    )
+    
+    meta_val_style = ParagraphStyle(
+        'MetaVal',
+        parent=normal_style,
+        fontName='Helvetica',
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor('#1f2937'),
+        alignment=2
+    )
+    
+    section_title_style = ParagraphStyle(
+        'SectionTitle',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=9,
+        leading=11,
+        textColor=colors.white
+    )
+    
+    info_text_style = ParagraphStyle(
+        'InfoText',
+        parent=normal_style,
+        fontName='Helvetica',
+        fontSize=7.5,
+        leading=11,
+        textColor=colors.HexColor('#6b7280')
+    )
+    
+    th_style = ParagraphStyle(
+        'TableHeader',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=8,
+        leading=10,
+        textColor=colors.white
+    )
+    
+    th_style_right = ParagraphStyle(
+        'TableHeaderRight',
+        parent=th_style,
+        alignment=2
+    )
+    
+    td_style = ParagraphStyle(
+        'TableCell',
+        parent=normal_style,
+        fontName='Helvetica',
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor('#1f2937')
+    )
+    
+    td_style_right = ParagraphStyle(
+        'TableCellRight',
+        parent=td_style,
+        alignment=2
+    )
+    
+    td_style_right_bold = ParagraphStyle(
+        'TableCellRightBold',
+        parent=td_style,
+        fontName='Helvetica-Bold',
+        alignment=2,
+        textColor=colors.HexColor('#1a56db')
+    )
+    
+    td_style_right_red = ParagraphStyle(
+        'TableCellRightRed',
+        parent=td_style,
+        alignment=2,
+        textColor=colors.HexColor('#ef4444')
+    )
+    
+    logo_flowable = Spacer(1, 1)
+    if logo_path and os.path.exists(logo_path):
+        try:
+            logo_flowable = Image(logo_path, width=120, height=40)
+            logo_flowable.hAlign = 'LEFT'
+        except Exception:
+            pass
+            
+    ref = sale.get("Ref", "")
+    date_str = sale.get("date", "").split("T")[0]
+    
+    meta_data = [
+        [Paragraph("Date:", meta_label_style), Paragraph(date_str, meta_val_style)],
+        [Paragraph("Invoice No:", meta_label_style), Paragraph(ref, meta_val_style)],
+        [Paragraph("Status:", meta_label_style), Paragraph("Completed", meta_val_style)],
+        [Paragraph("Payment:", meta_label_style), Paragraph("Paid", meta_val_style)]
+    ]
+    meta_table = Table(meta_data, colWidths=[80, 80])
+    meta_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 1),
+        ('TOPPADDING', (0,0), (-1,-1), 1),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+    ]))
+    
+    right_flowables = [
+        Paragraph("Sales Invoice", title_style),
+        Spacer(1, 4),
+        Paragraph(ref, ref_style),
+        Spacer(1, 4),
+        meta_table
+    ]
+    
+    header_table = Table([[logo_flowable, right_flowables]], colWidths=[200, 335])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 10))
+    
+    line_table = Table([[""]], colWidths=[535], rowHeights=[2])
+    line_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#1a56db')),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(line_table)
+    story.append(Spacer(1, 10))
+    
+    client_name = sale.get("client_name") or "Walk-in Customer"
+    client_phone = sale.get("client_phone") or "N/A"
+    client_email = sale.get("client_email") or "N/A"
+    client_adr = sale.get("client_adr") or "N/A"
+    
+    company_name = sale.get("company_name") or "Venzures"
+    company_phone = "8871298291"
+    company_email = "admin@example.com"
+    company_adr = "Bhopal"
+    
+    bill_to_header = Table([[Paragraph("Bill To", section_title_style)]], colWidths=[255], rowHeights=[20])
+    bill_to_header.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#1a56db')),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+    ]))
+    
+    bill_to_body_text = f"<b>{client_name}</b><br/>Phone: {client_phone}<br/>Email: {client_email}<br/>Address: {client_adr}"
+    bill_to_body = Table([[Paragraph(bill_to_body_text, info_text_style)]], colWidths=[255])
+    bill_to_body.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#f9fafb')),
+        ('BOX', (0,0), (0,0), 0.5, colors.HexColor('#e5e7eb')),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('RIGHTPADDING', (0,0), (-1,-1), 8),
+    ]))
+    
+    bill_to_flow = KeepTogether([bill_to_header, bill_to_body])
+    
+    from_header = Table([[Paragraph("From", section_title_style)]], colWidths=[255], rowHeights=[20])
+    from_header.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#1a56db')),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+    ]))
+    
+    from_body_text = f"<b>{company_name}</b><br/>Phone: {company_phone}<br/>Email: {company_email}<br/>Address: {company_adr}"
+    from_body = Table([[Paragraph(from_body_text, info_text_style)]], colWidths=[255])
+    from_body.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#f9fafb')),
+        ('BOX', (0,0), (0,0), 0.5, colors.HexColor('#e5e7eb')),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('RIGHTPADDING', (0,0), (-1,-1), 8),
+    ]))
+    
+    from_flow = KeepTogether([from_header, from_body])
+    
+    info_table = Table([[bill_to_flow, "", from_flow]], colWidths=[255, 25, 255])
+    info_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(info_table)
+    story.append(Spacer(1, 15))
+    
+    col_widths = [220, 65, 50, 60, 60, 80]
+    items_data = [[
+        Paragraph("Product", th_style),
+        Paragraph("Price", th_style_right),
+        Paragraph("Qty", th_style_right),
+        Paragraph("Disc", th_style_right),
+        Paragraph("Tax", th_style_right),
+        Paragraph("Total", th_style_right)
+    ]]
+    
+    subtotal = 0.0
+    for idx, item in enumerate(details):
+        p_name = item.get("product_name", "")
+        p_code = item.get("product_code", "")
+        qty = float(item.get("quantity", 0))
+        price = float(item.get("price", 0))
+        discount_net = float(item.get("discount") or 0)
+        tax_net = float(item.get("TaxNet") or 0)
+        total = float(item.get("total", 0))
+        subtotal += total
+        
+        prod_paragraph = Paragraph(f"<b>{p_name}</b><br/><font color='#6b7280' size='7'>Code: {p_code}</font>", td_style)
+        items_data.append([
+            prod_paragraph,
+            Paragraph(f"$ {price:.2f}", td_style_right),
+            Paragraph(f"{qty:.0f} pc", td_style_right),
+            Paragraph(f"$ {discount_net:.2f}", td_style_right_red),
+            Paragraph(f"$ {tax_net:.2f}", td_style_right),
+            Paragraph(f"$ {total:.2f}", td_style_right_bold)
+        ])
+        
+    items_table = Table(items_data, colWidths=col_widths)
+    t_style = [
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1a56db')),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        ('TOPPADDING', (0,0), (-1,0), 6),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+    ]
+    for i in range(1, len(items_data)):
+        bg = colors.HexColor('#ffffff') if i % 2 != 0 else colors.HexColor('#f9fafb')
+        t_style.append(('BACKGROUND', (0,i), (-1,i), bg))
+        t_style.append(('TOPPADDING', (0,i), (-1,i), 6))
+        t_style.append(('BOTTOMPADDING', (0,i), (-1,i), 6))
+        
+    items_table.setStyle(TableStyle(t_style))
+    story.append(items_table)
+    story.append(Spacer(1, 15))
+    
+    discount = float(sale.get("discount") or 0)
+    shipping = float(sale.get("shipping") or 0)
+    grand_total = float(sale.get("GrandTotal") or 0)
+    paid_amount = float(sale.get("paid_amount") or 0)
+    tax_net_sale = float(sale.get("TaxNet") or 0)
+    due = grand_total - paid_amount
+    
+    summary_label_style = ParagraphStyle(
+        'SumLabel',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor('#6b7280')
+    )
+    summary_val_style = ParagraphStyle(
+        'SumVal',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=8.5,
+        leading=10,
+        textColor=colors.HexColor('#1f2937'),
+        alignment=2
+    )
+    summary_val_style_red = ParagraphStyle(
+        'SumValRed',
+        parent=summary_val_style,
+        textColor=colors.HexColor('#ef4444')
+    )
+    
+    gt_label_style = ParagraphStyle(
+        'GTLabel',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=9.5,
+        leading=12,
+        textColor=colors.white
+    )
+    gt_val_style = ParagraphStyle(
+        'GTVal',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=10.5,
+        leading=12,
+        textColor=colors.white,
+        alignment=2
+    )
+    
+    paid_label_style = ParagraphStyle(
+        'PaidLabel',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor('#065f46')
+    )
+    paid_val_style = ParagraphStyle(
+        'PaidVal',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=9,
+        leading=11,
+        textColor=colors.HexColor('#065f46'),
+        alignment=2
+    )
+    
+    due_label_style = ParagraphStyle(
+        'DueLabel',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor('#92400e')
+    )
+    due_val_style = ParagraphStyle(
+        'DueVal',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=9,
+        leading=11,
+        textColor=colors.HexColor('#92400e'),
+        alignment=2
+    )
+    
+    totals_data = [
+        [Paragraph("Subtotal", summary_label_style), Paragraph(f"$ {subtotal:.2f}", summary_val_style)],
+        [Paragraph("Order Tax", summary_label_style), Paragraph(f"$ {tax_net_sale:.2f}", summary_val_style)],
+        [Paragraph("Discount", summary_label_style), Paragraph(f"- $ {discount:.2f}", summary_val_style_red)],
+        [Paragraph("Shipping", summary_label_style), Paragraph(f"$ {shipping:.2f}", summary_val_style)],
+        [Paragraph("Grand Total", gt_label_style), Paragraph(f"$ {grand_total:.2f}", gt_val_style)],
+        [Paragraph("Paid Amount", paid_label_style), Paragraph(f"$ {paid_amount:.2f}", paid_val_style)],
+        [Paragraph("Amount Due", due_label_style), Paragraph(f"$ {due:.2f}", due_val_style)]
+    ]
+    
+    totals_table = Table(totals_data, colWidths=[110, 110])
+    totals_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f9fafb')),
+        ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#ffffff')),
+        ('BACKGROUND', (0,2), (-1,2), colors.HexColor('#f9fafb')),
+        ('BACKGROUND', (0,3), (-1,3), colors.HexColor('#ffffff')),
+        ('BACKGROUND', (0,4), (-1,4), colors.HexColor('#1a56db')),
+        ('BACKGROUND', (0,5), (-1,5), colors.HexColor('#d1fae5')),
+        ('BACKGROUND', (0,6), (-1,6), colors.HexColor('#fef3c7')),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('LEFTPADDING', (0,0), (-1,-1), 10),
+        ('RIGHTPADDING', (0,0), (-1,-1), 10),
+    ]))
+    
+    totals_layout = Table([["", totals_table]], colWidths=[315, 220])
+    totals_layout.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(totals_layout)
+    story.append(Spacer(1, 20))
+    
+    footer_title_style = ParagraphStyle(
+        'FooterTitle',
+        parent=normal_style,
+        fontName='Helvetica-Bold',
+        fontSize=10,
+        leading=12,
+        textColor=colors.HexColor('#1a56db'),
+        alignment=1
+    )
+    footer_text_style = ParagraphStyle(
+        'FooterText',
+        parent=normal_style,
+        fontName='Helvetica',
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor('#6b7280'),
+        alignment=1
+    )
+    
+    footer_flowables = KeepTogether([
+        Table([[""]], colWidths=[535], rowHeights=[1.5], style=TableStyle([('BACKGROUND', (0,0),(0,0), colors.HexColor('#e5e7eb'))])),
+        Spacer(1, 8),
+        Paragraph("Thank you for your purchase!", footer_title_style),
+        Spacer(1, 4),
+        Paragraph("Powered by OpenClaw AI POS", footer_text_style)
+    ])
+    story.append(footer_flowables)
+    
+    doc.build(story)
+
+def ensure_dependencies_installed():
+    try:
+        import reportlab
+        from xhtml2pdf import pisa
+    except ImportError:
+        import subprocess
+        import sys
+        import site
+        print("Required PDF libraries not found. Bootstrapping...", file=sys.stderr)
+        
+        # 1. Try to run with --user to see if pip is already there but not in path
+        user_site = site.getusersitepackages()
+        if user_site not in sys.path:
+            sys.path.append(user_site)
+            
+        try:
+            import reportlab
+            from xhtml2pdf import pisa
+            return
+        except ImportError:
+            pass
+            
+        # 2. Try to run ensurepip
+        try:
+            subprocess.check_call([sys.executable, "-m", "ensurepip", "--user"])
+        except Exception:
+            # 3. Fallback to downloading get-pip.py
+            try:
+                import urllib.request
+                print("Downloading get-pip.py...", file=sys.stderr)
+                urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", "/tmp/get-pip.py")
+                subprocess.check_call([sys.executable, "/tmp/get-pip.py", "--user"])
+            except Exception as e:
+                print(f"Failed to bootstrap pip: {e}", file=sys.stderr)
+                raise
+                
+        # Update path again
+        if user_site not in sys.path:
+            sys.path.append(user_site)
+            
+        # 4. Install packages
+        try:
+            print("Installing reportlab and xhtml2pdf...", file=sys.stderr)
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "reportlab", "xhtml2pdf"])
+        except Exception as e:
+            print(f"Failed to install packages: {e}", file=sys.stderr)
+            raise
+            
+        # Update path once more
+        if user_site not in sys.path:
+            sys.path.append(user_site)
+
+def generate_and_print_receipt(data):
+    sale = data.get("sale")
+    details = data.get("details")
+    if not sale or not details:
+        return
+        
+    try:
+        import base64
+        receipt_html = generate_receipt_html(sale, details)
+        filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".html"
+        filepath = "/tmp/" + filename
+        with open(filepath, "w") as f:
+            f.write(receipt_html)
+        print("MEDIA:" + filename)
+        
+        # Compile to PDF directly using reportlab first
+        try:
+            ensure_dependencies_installed()
+            pdf_filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".pdf"
+            pdf_filepath = "/tmp/" + pdf_filename
+            logo_path = "/home/vercel-sandbox/.openclaw/skills/pos-system/logo.png"
+            
+            generate_receipt_pdf_reportlab(sale, details, pdf_filepath, logo_path)
+            
+            with open(pdf_filepath, "rb") as pdf_file:
+                pdf_data = pdf_file.read()
+            
+            pdf_b64 = base64.b64encode(pdf_data).decode("utf-8")
+            print("MEDIA:data:application/pdf;name=" + pdf_filename + ";base64," + pdf_b64)
+            # Print as a clean markdown link as well so the agent can easily reference it
+            print("[Download Invoice (PDF)](MEDIA:data:application/pdf;name=" + pdf_filename + ";base64," + pdf_b64 + ")")
+        except Exception as pdf_err:
+            print(f"Error compiling PDF via ReportLab: {pdf_err}", file=sys.stderr)
+            # Fallback to xhtml2pdf
+            try:
+                from xhtml2pdf import pisa
+                pdf_filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".pdf"
+                pdf_filepath = "/tmp/" + pdf_filename
+                with open(pdf_filepath, "wb") as pdf_file:
+                    pisa.CreatePDF(receipt_html, dest=pdf_file)
+                with open(pdf_filepath, "rb") as pdf_file:
+                    pdf_data = pdf_file.read()
+                pdf_b64 = base64.b64encode(pdf_data).decode("utf-8")
+                print("MEDIA:data:application/pdf;name=" + pdf_filename + ";base64," + pdf_b64)
+                print("[Download Invoice (PDF)](MEDIA:data:application/pdf;name=" + pdf_filename + ";base64," + pdf_b64 + ")")
+            except Exception as fallback_err:
+                print(f"Error compiling fallback PDF: {fallback_err}", file=sys.stderr)
+                # Fallback: Base64 encode HTML for direct channel attachments
+                b64_data = base64.b64encode(receipt_html.encode("utf-8")).decode("utf-8")
+                print("MEDIA:data:text/html;name=" + filename + ";base64," + b64_data)
+                print("[Download Invoice (HTML)](MEDIA:data:text/html;name=" + filename + ";base64," + b64_data + ")")
+    except Exception as e:
+        print(f"Error generating receipt: {e}", file=sys.stderr)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--action", required=True)
@@ -4516,52 +5067,14 @@ def main():
             print("Error: --id is required", file=sys.stderr); sys.exit(1)
         data = api_fetch("get-sale", {"id": args.id_})
         print(json.dumps(data, indent=2))
+        generate_and_print_receipt(data)
 
     elif action == "create-sale":
         if not args.data:
             print("Error: --data (JSON string) is required", file=sys.stderr); sys.exit(1)
         data = api_fetch("create-sale", {"data": json.loads(args.data)})
         print(json.dumps(data, indent=2))
-        
-        # Generate the beautiful bill/receipt and write it
-        sale = data.get("sale")
-        details = data.get("details")
-        if sale and details:
-            try:
-                import base64
-                receipt_html = generate_receipt_html(sale, details)
-                filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".html"
-                filepath = "/tmp/" + filename
-                with open(filepath, "w") as f:
-                    f.write(receipt_html)
-                print("MEDIA:" + filename)
-                
-                # Compile to PDF using xhtml2pdf
-                try:
-                    import subprocess
-                    try:
-                        from xhtml2pdf import pisa
-                    except ImportError:
-                        subprocess.check_call([sys.executable, "-m", "pip", "install", "xhtml2pdf", "reportlab"])
-                        from xhtml2pdf import pisa
-                    
-                    pdf_filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".pdf"
-                    pdf_filepath = "/tmp/" + pdf_filename
-                    with open(pdf_filepath, "wb") as pdf_file:
-                        pisa.CreatePDF(receipt_html, dest=pdf_file)
-                    
-                    with open(pdf_filepath, "rb") as pdf_file:
-                        pdf_data = pdf_file.read()
-                    
-                    pdf_b64 = base64.b64encode(pdf_data).decode("utf-8")
-                    print("MEDIA:data:application/pdf;name=" + pdf_filename + ";base64," + pdf_b64)
-                except Exception as pdf_err:
-                    print(f"Error compiling PDF: {pdf_err}", file=sys.stderr)
-                    # Fallback: Base64 encode HTML for direct channel attachments (like Telegram files)
-                    b64_data = base64.b64encode(receipt_html.encode("utf-8")).decode("utf-8")
-                    print("MEDIA:data:text/html;name=" + filename + ";base64," + b64_data)
-            except Exception as e:
-                print(f"Error generating receipt: {e}", file=sys.stderr)
+        generate_and_print_receipt(data)
 
     elif action == "stock-alerts":
         data = api_fetch("stock-alerts")

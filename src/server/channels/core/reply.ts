@@ -239,6 +239,43 @@ function extractImagesFromTextContent(content: string): {
     },
   );
 
+  // Parse markdown links of form [linkText](destination) if the destination
+  // contains a media reference (starts with MEDIA:, starts with data:, is a sandbox path, or has a safe filename)
+  textWithoutMedia = textWithoutMedia.replace(
+    /\[([^\]]*)\]\(([^)]+)\)/g,
+    (match, linkText: string, destination: string) => {
+      const parsedDestination = parseMarkdownImageDestination(destination);
+      let mediaPath = parsedDestination.trim();
+      let hasMediaPrefix = false;
+      if (mediaPath.startsWith("MEDIA:")) {
+        mediaPath = mediaPath.slice(6).trim();
+        hasMediaPrefix = true;
+      }
+
+      const isData = mediaPath.toLowerCase().startsWith("data:");
+      const isRelative = !mediaPath.includes("://") && !isData;
+      const isSafeFile = /^[a-zA-Z0-9._-]+$/.test(mediaPath) && !mediaPath.startsWith(".");
+      
+      const shouldExtract =
+        hasMediaPrefix ||
+        isData ||
+        (isRelative && (isSafeFile || mediaPath.startsWith("/workspace/")));
+
+      if (shouldExtract) {
+        const parsedImage = toReplyImage(mediaPath, linkText);
+        if (parsedImage) {
+          const entry = toReplyMedia(parsedImage, mediaPath);
+          media.push(entry);
+          if (entry.type === "image") {
+            images.push(parsedImage);
+          }
+          return "";
+        }
+      }
+      return match;
+    },
+  );
+
   return {
     text: normalizeReplyText(textWithoutMedia),
     images,

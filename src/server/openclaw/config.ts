@@ -78,6 +78,7 @@ export const OPENCLAW_WORKER_SANDBOX_BATCH_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/
 export const OPENCLAW_POS_SKILL_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/SKILL.md`;
 export const OPENCLAW_POS_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/scripts/pos.mjs`;
 export const OPENCLAW_POS_PYTHON_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/scripts/pos.py`;
+export const OPENCLAW_POS_LOGO_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/logo.png`;
 export const OPENCLAW_SOUL_PATH = `${OPENCLAW_STATE_DIR}/workspace/SOUL.md`;
 export const OPENCLAW_AGENTS_PATH = `${OPENCLAW_STATE_DIR}/workspace/AGENTS.md`;
 
@@ -4159,191 +4160,247 @@ import urllib.request
 import urllib.error
 
 def generate_receipt_html(sale, details):
+    import base64
+    logo_base64 = ""
+    try:
+        logo_path = "/home/vercel-sandbox/.openclaw/skills/pos-system/logo.png"
+        if os.path.exists(logo_path):
+            with open(logo_path, "rb") as logo_f:
+                logo_base64 = "data:image/png;base64," + base64.b64encode(logo_f.read()).decode("utf-8")
+    except Exception as e:
+        pass
+
+    # Build items HTML rows
     items_html = ""
-    for item in details:
+    subtotal = 0.0
+    for idx, item in enumerate(details):
         p_name = item.get("product_name", "")
         p_code = item.get("product_code", "")
         qty = float(item.get("quantity", 0))
         price = float(item.get("price", 0))
+        discount_net = float(item.get("discount") or 0)
+        tax_net = float(item.get("TaxNet") or 0)
         total = float(item.get("total", 0))
+        subtotal += total
+        
+        bg_color = "#ffffff" if idx % 2 == 0 else "#f9fafb"
+        
         items_html += (
-            f"<tr>"
-            f"<td style=\\"padding: 6px 0;\\">{{p_name}}<br/><span style=\\"font-size: 11px; color: #666;\\">{{p_code}}</span></td>"
-            f"<td style=\\"text-align: center; padding: 6px 0;\\">{{qty:.0f}}</td>"
-            f"<td style=\\"text-align: right; padding: 6px 0;\\">\${{price:.2f}}</td>"
-            f"<td style=\\"text-align: right; padding: 6px 0;\\">\${{total:.2f}}</td>"
-            f"</tr>"
+            f"<tr style=\\"border-bottom: 1px solid #e5e7eb; background: {bg_color};\\">"
+            f"<td style=\\"padding: 6px 5px; vertical-align: top;\\">"
+            f"<div style=\\"font-weight: 600; font-size: 8.5pt; color: #1f2937;\\">{p_name}</div>"
+            f"<div style=\\"font-size: 7pt; color: #6b7280;\\">Code: {p_code}</div>"
+            "</td>"
+            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\\">" + "$" + f" {price:.2f}</td>"
+            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\\">{qty:.0f} pc</td>"
+            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #ef4444;\\">" + "$" + f" {discount_net:.2f}</td>"
+            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 8.5pt; color: #1f2937;\\">" + "$" + f" {tax_net:.2f}</td>"
+            f"<td style=\\"padding: 6px 5px; text-align: right; font-size: 9pt; font-weight: bold; color: #1a56db;\\">" + "$" + f" {total:.2f}</td>"
+            "</tr>"
         )
+
     discount = float(sale.get("discount") or 0)
     shipping = float(sale.get("shipping") or 0)
     grand_total = float(sale.get("GrandTotal") or 0)
-    subtotal = grand_total + discount - shipping
+    paid_amount = float(sale.get("paid_amount") or 0)
+    tax_net_sale = float(sale.get("TaxNet") or 0)
+    due = grand_total - paid_amount
     
-    phone_row = ""
-    if sale.get("client_phone"):
-        phone_row = f"<tr><td><strong>Phone:</strong></td><td style=\\"text-align: right;\\">{{sale['client_phone']}}</td></tr>"
-        
     client_name = sale.get("client_name") or "Walk-in Customer"
-    wh_name = sale.get("warehouse_name") or "Main Warehouse"
-    ref = sale.get("Ref", "")
-    date_str = sale.get("date", "")
+    client_phone = sale.get("client_phone") or "N/A"
+    client_email = sale.get("client_email") or "N/A"
+    client_adr = sale.get("client_adr") or "N/A"
     
-    html = f"""<!DOCTYPE html>
+    company_name = sale.get("company_name") or "Venzures"
+    company_phone = "8871298291"
+    company_email = "admin@example.com"
+    company_adr = "Bhopal"
+    
+    ref = sale.get("Ref", "")
+    date_str = sale.get("date", "").split("T")[0]
+    
+    logo_img_tag = ""
+    if logo_base64:
+        logo_img_tag = f'<img src="{logo_base64}" alt="Logo" style="max-height: 60px; max-width: 180px;">'
+        
+    template = """<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>Invoice - {{ref}}</title>
-  <style>
-    body {{
-      font-family: 'Courier New', Courier, monospace;
-      color: #000;
-      background: #fff;
-      margin: 0;
-      padding: 20px;
-      font-size: 14px;
-    }}
-    .receipt {{
-      max-width: 380px;
-      margin: 0 auto;
-      padding: 15px;
-      border: 1px dashed #ccc;
-    }}
-    .header {{
-      text-align: center;
-      margin-bottom: 20px;
-    }}
-    .header h2 {{
-      margin: 0 0 5px 0;
-      font-size: 20px;
-      letter-spacing: 1px;
-    }}
-    .header p {{
-      margin: 0;
-      font-size: 12px;
-      color: #555;
-    }}
-    .info {{
-      margin-bottom: 15px;
-      border-bottom: 1px dashed #000;
-      padding-bottom: 10px;
-      font-size: 12px;
-      line-height: 1.4;
-    }}
-    .info table {{
-      width: 100%;
-    }}
-    .items-table {{
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 15px;
-    }}
-    .items-table th {{
-      border-bottom: 1px solid #000;
-      padding-bottom: 5px;
-      font-size: 12px;
-    }}
-    .items-table td {{
-      font-size: 13px;
-    }}
-    .totals {{
-      border-top: 1px dashed #000;
-      padding-top: 10px;
-      margin-bottom: 20px;
-      font-size: 13px;
-    }}
-    .totals table {{
-      width: 100%;
-    }}
-    .totals td {{
-      padding: 3px 0;
-    }}
-    .totals .grand-total {{
-      font-weight: bold;
-      font-size: 15px;
-      border-top: 1px solid #000;
-      padding-top: 6px;
-    }}
-    .footer {{
-      text-align: center;
-      font-size: 12px;
-      margin-top: 25px;
-      border-top: 1px dashed #ccc;
-      padding-top: 15px;
-    }}
-  </style>
+    <meta charset="utf-8">
+    <title>Sale Invoice - __REF__</title>
+    <style>
+        @page { 
+            size: A4;
+            margin: 10mm 15mm; 
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: Helvetica, Arial, sans-serif; 
+            font-size: 9pt; 
+            color: #1f2937; 
+            line-height: 1.4; 
+            padding: 15px 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+    </style>
 </head>
 <body>
-  <div class="receipt">
-    <div class="header">
-      <h2>VENZURES POS</h2>
-      <p>Smart Inventory & Sales System</p>
-    </div>
-    <div class="info">
-      <table>
+    <table style="width: 100%; margin-bottom: 12px;">
         <tr>
-          <td><strong>Invoice Ref:</strong></td>
-          <td style="text-align: right;">{{ref}}</td>
+            <td style="width: 30%; vertical-align: top;">
+                __LOGO_IMG__
+            </td>
+            <td style="width: 70%; vertical-align: top; text-align: right;">
+                <div style="font-size: 18pt; font-weight: bold; color: #1a56db; margin-bottom: 6px; letter-spacing: 0.5px;">Sales Invoice</div>
+                <div style="display: inline-block; background: #f3f4f6; padding: 5px 12px; border-radius: 4px; font-size: 10pt; font-weight: bold; color: #4b5563; margin-bottom: 8px;">__REF__</div>
+                <table style="width: 100%; font-size: 8pt; margin-top: 6px;">
+                    <tr>
+                        <td style="text-align: right; color: #6b7280; font-weight: 600;">Date:</td>
+                        <td style="text-align: right; color: #1f2937; font-weight: 500; padding-left: 10px;">__DATE__</td>
+                    </tr>
+                    <tr>
+                        <td style="text-align: right; color: #6b7280; font-weight: 600;">Invoice No:</td>
+                        <td style="text-align: right; color: #1f2937; font-weight: 500; padding-left: 10px;">__REF__</td>
+                    </tr>
+                    <tr>
+                        <td style="text-align: right; color: #6b7280; font-weight: 600;">Status:</td>
+                        <td style="text-align: right; padding-left: 10px;">
+                            <span style="background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 3px; font-size: 7pt; font-weight: bold; text-transform: uppercase;">Completed</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="text-align: right; color: #6b7280; font-weight: 600;">Payment:</td>
+                        <td style="text-align: right; padding-left: 10px;">
+                            <span style="background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 3px; font-size: 7pt; font-weight: bold; text-transform: uppercase;">Paid</span>
+                        </td>
+                    </tr>
+                </table>
+            </td>
         </tr>
-        <tr>
-          <td><strong>Date:</strong></td>
-          <td style="text-align: right;">{{date_str}}</td>
-        </tr>
-        <tr>
-          <td><strong>Customer:</strong></td>
-          <td style="text-align: right;">{{client_name}}</td>
-        </tr>
-        {{phone_row}}
-        <tr>
-          <td><strong>Warehouse:</strong></td>
-          <td style="text-align: right;">{{wh_name}}</td>
-        </tr>
-      </table>
-    </div>
-    <table class="items-table">
-      <thead>
-        <tr>
-          <th style="text-align: left;">Item</th>
-          <th style="text-align: center; width: 40px;">Qty</th>
-          <th style="text-align: right; width: 70px;">Price</th>
-          <th style="text-align: right; width: 70px;">Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{items_html}}
-      </tbody>
     </table>
-    <div class="totals">
-      <table>
+
+    <div style="height: 2px; background: #1a56db; margin: 8px 0 10px 0;"></div>
+
+    <table style="width: 100%; margin-bottom: 12px;">
         <tr>
-          <td>Subtotal:</td>
-          <td style="text-align: right;">\${{subtotal:.2f}}</td>
+            <td style="width: 48%; vertical-align: top;">
+                <div style="border: 1px solid #e5e7eb; border-radius: 4px; overflow: hidden;">
+                    <div style="background: #1a56db; padding: 5px 10px; border-bottom: 1px solid #3b82f6;">
+                        <div style="color: #ffffff; font-size: 9pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.3px;">Bill To</div>
+                    </div>
+                    <div style="padding: 8px 10px; background: #f9fafb;">
+                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 4px;">__CLIENT_NAME__</div>
+                        <div style="font-size: 7.5pt; color: #6b7280; line-height: 1.5;">
+                            <strong>Phone:</strong> __CLIENT_PHONE__<br/>
+                            <strong>Email:</strong> __CLIENT_EMAIL__<br/>
+                            <strong>Address:</strong> __CLIENT_ADR__
+                        </div>
+                    </div>
+                </div>
+            </td>
+            <td style="width: 4%;"></td>
+            <td style="width: 48%; vertical-align: top;">
+                <div style="border: 1px solid #e5e7eb; border-radius: 4px; overflow: hidden;">
+                    <div style="background: #1a56db; padding: 5px 10px; border-bottom: 1px solid #3b82f6;">
+                        <div style="color: #ffffff; font-size: 9pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.3px;">From</div>
+                    </div>
+                    <div style="padding: 8px 10px; background: #f9fafb;">
+                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 4px;">__COMPANY_NAME__</div>
+                        <div style="font-size: 7.5pt; color: #6b7280; line-height: 1.5;">
+                            <strong>Phone:</strong> __COMPANY_PHONE__<br/>
+                            <strong>Email:</strong> __COMPANY_EMAIL__<br/>
+                            <strong>Address:</strong> __COMPANY_ADR__
+                        </div>
+                    </div>
+                </div>
+            </td>
         </tr>
-"""
-    if discount > 0:
-        html += f"""        <tr>
-          <td>Discount:</td>
-          <td style="text-align: right;">-\${{discount:.2f}}</td>
+    </table>
+
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid #e5e7eb;">
+        <thead>
+            <tr style="background: #1a56db; color: #ffffff;">
+                <th style="padding: 6px 5px; text-align: left; font-size: 8pt; font-weight: bold; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">Product</th>
+                <th style="padding: 6px 5px; text-align: right; font-size: 8pt; font-weight: bold; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">Price</th>
+                <th style="padding: 6px 5px; text-align: right; font-size: 8pt; font-weight: bold; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">Qty</th>
+                <th style="padding: 6px 5px; text-align: right; font-size: 8pt; font-weight: bold; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">Disc</th>
+                <th style="padding: 6px 5px; text-align: right; font-size: 8pt; font-weight: bold; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">Tax</th>
+                <th style="padding: 6px 5px; text-align: right; font-size: 8pt; font-weight: bold; text-transform: uppercase;">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            __ITEMS_HTML__
+        </tbody>
+    </table>
+
+    <table style="width: 100%; margin-bottom: 10px;">
+        <tr>
+            <td style="width: 58%;"></td>
+            <td style="width: 42%; vertical-align: top;">
+                <table style="width: 100%; border: 1px solid #e5e7eb; border-radius: 4px; border-collapse: collapse;">
+                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+                        <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">Subtotal</td>
+                        <td style="padding: 5px 10px; font-size: 8.5pt; font-weight: 600; color: #1f2937; text-align: right;">$ __SUBTOTAL__</td>
+                    </tr>
+                    <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
+                        <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">Order Tax</td>
+                        <td style="padding: 5px 10px; font-size: 8.5pt; font-weight: 600; color: #1f2937; text-align: right;">$ __ORDER_TAX__</td>
+                    </tr>
+                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+                        <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">Discount</td>
+                        <td style="padding: 5px 10px; font-size: 8.5pt; font-weight: 600; color: #ef4444; text-align: right;">- $ __DISCOUNT__</td>
+                    </tr>
+                    <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
+                        <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">Shipping</td>
+                        <td style="padding: 5px 10px; font-size: 8.5pt; font-weight: 600; color: #1f2937; text-align: right;">$ __SHIPPING__</td>
+                    </tr>
+                    <tr style="background: #1a56db;">
+                        <td style="padding: 8px 10px; font-size: 10pt; font-weight: bold; color: #ffffff;">Grand Total</td>
+                        <td style="padding: 8px 10px; font-size: 11pt; font-weight: bold; color: #ffffff; text-align: right;">$ __GRAND_TOTAL__</td>
+                    </tr>
+                    <tr style="background: #d1fae5; border-bottom: 1px solid #a7f3d0;">
+                        <td style="padding: 6px 10px; font-size: 8.5pt; font-weight: bold; color: #065f46;">Paid Amount</td>
+                        <td style="padding: 6px 10px; font-size: 9pt; font-weight: bold; color: #065f46; text-align: right;">$ __PAID_AMOUNT__</td>
+                    </tr>
+                    <tr style="background: #fef3c7;">
+                        <td style="padding: 6px 10px; font-size: 8.5pt; font-weight: bold; color: #92400e;">Amount Due</td>
+                        <td style="padding: 6px 10px; font-size: 9pt; font-weight: bold; color: #92400e; text-align: right;">$ __DUE__</td>
+                    </tr>
+                </table>
+            </td>
         </tr>
-"""
-    if shipping > 0:
-        html += f"""        <tr>
-          <td>Shipping:</td>
-          <td style="text-align: right;">\${{shipping:.2f}}</td>
-        </tr>
-"""
-    html += f"""        <tr class="grand-total">
-          <td><strong>Grand Total:</strong></td>
-          <td style="text-align: right;"><strong>\${{grand_total:.2f}}</strong></td>
-        </tr>
-      </table>
+    </table>
+
+    <div style="margin-top: 15px; padding-top: 10px; border-top: 2px solid #e5e7eb; text-align: center;">
+        <div style="font-size: 10pt; font-weight: bold; color: #1a56db; margin-bottom: 5px;">Thank you for your purchase!</div>
+        <div style="font-size: 8pt; color: #6b7280;">Powered by OpenClaw AI POS</div>
     </div>
-    <div class="footer">
-      <p>Thank you for your purchase!</p>
-      <p style="font-size: 10px; color: #777;">Powered by OpenClaw AI POS</p>
-    </div>
-  </div>
 </body>
 </html>"""
+
+    html = template.replace("__REF__", ref)
+    html = html.replace("__DATE__", date_str)
+    html = html.replace("__LOGO_IMG__", logo_img_tag)
+    html = html.replace("__CLIENT_NAME__", client_name)
+    html = html.replace("__CLIENT_PHONE__", client_phone)
+    html = html.replace("__CLIENT_EMAIL__", client_email)
+    html = html.replace("__CLIENT_ADR__", client_adr)
+    html = html.replace("__COMPANY_NAME__", company_name)
+    html = html.replace("__COMPANY_PHONE__", company_phone)
+    html = html.replace("__COMPANY_EMAIL__", company_email)
+    html = html.replace("__COMPANY_ADR__", company_adr)
+    html = html.replace("__ITEMS_HTML__", items_html)
+    html = html.replace("__SUBTOTAL__", f"{subtotal:.2f}")
+    html = html.replace("__ORDER_TAX__", f"{tax_net_sale:.2f}")
+    html = html.replace("__DISCOUNT__", f"{discount:.2f}")
+    html = html.replace("__SHIPPING__", f"{shipping:.2f}")
+    html = html.replace("__GRAND_TOTAL__", f"{grand_total:.2f}")
+    html = html.replace("__PAID_AMOUNT__", f"{paid_amount:.2f}")
+    html = html.replace("__DUE__", f"{due:.2f}")
+    
     return html
 
 def main():
@@ -4479,9 +4536,30 @@ def main():
                     f.write(receipt_html)
                 print("MEDIA:" + filename)
                 
-                # Base64 encode for direct channel attachments (like Telegram files)
-                b64_data = base64.b64encode(receipt_html.encode("utf-8")).decode("utf-8")
-                print("MEDIA:data:text/html;name=" + filename + ";base64," + b64_data)
+                # Compile to PDF using xhtml2pdf
+                try:
+                    import subprocess
+                    try:
+                        from xhtml2pdf import pisa
+                    except ImportError:
+                        subprocess.check_call([sys.executable, "-m", "pip", "install", "xhtml2pdf", "reportlab"])
+                        from xhtml2pdf import pisa
+                    
+                    pdf_filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".pdf"
+                    pdf_filepath = "/tmp/" + pdf_filename
+                    with open(pdf_filepath, "wb") as pdf_file:
+                        pisa.CreatePDF(receipt_html, dest=pdf_file)
+                    
+                    with open(pdf_filepath, "rb") as pdf_file:
+                        pdf_data = pdf_file.read()
+                    
+                    pdf_b64 = base64.b64encode(pdf_data).decode("utf-8")
+                    print("MEDIA:data:application/pdf;name=" + pdf_filename + ";base64," + pdf_b64)
+                except Exception as pdf_err:
+                    print(f"Error compiling PDF: {pdf_err}", file=sys.stderr)
+                    # Fallback: Base64 encode HTML for direct channel attachments (like Telegram files)
+                    b64_data = base64.b64encode(receipt_html.encode("utf-8")).decode("utf-8")
+                    print("MEDIA:data:text/html;name=" + filename + ";base64," + b64_data)
             except Exception as e:
                 print(f"Error generating receipt: {e}", file=sys.stderr)
 
@@ -4496,4 +4574,11 @@ def main():
 if __name__ == "__main__":
     main()
 `;
+}
+
+export function buildPosLogoContent(): Buffer {
+  return Buffer.from(
+    "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",
+    "base64",
+  );
 }

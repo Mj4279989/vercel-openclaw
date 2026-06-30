@@ -37,6 +37,7 @@ import {
   buildPosScript,
   buildPosSkill,
   buildPosPythonScript,
+  buildPosLogoContent,
   buildSoulMd,
   buildAgentsMd,
   OPENCLAW_BUILTIN_IMAGE_GEN_SCRIPT_PATH,
@@ -76,6 +77,7 @@ import {
   OPENCLAW_POS_SCRIPT_PATH,
   OPENCLAW_POS_SKILL_PATH,
   OPENCLAW_POS_PYTHON_SCRIPT_PATH,
+  OPENCLAW_POS_LOGO_PATH,
   OPENCLAW_SOUL_PATH,
   OPENCLAW_AGENTS_PATH,
 } from "@/server/openclaw/config";
@@ -145,6 +147,7 @@ export function buildStaticRestoreFiles(): { path: string; content: Buffer }[] {
     { path: OPENCLAW_POS_SKILL_PATH, content: Buffer.from(buildPosSkill()) },
     { path: OPENCLAW_POS_SCRIPT_PATH, content: Buffer.from(buildPosScript()) },
     { path: OPENCLAW_POS_PYTHON_SCRIPT_PATH, content: Buffer.from(buildPosPythonScript()) },
+    { path: OPENCLAW_POS_LOGO_PATH, content: buildPosLogoContent() },
     { path: OPENCLAW_SOUL_PATH, content: Buffer.from(buildSoulMd()) },
     { path: OPENCLAW_AGENTS_PATH, content: Buffer.from(buildAgentsMd()) },
     ...buildWorkerSandboxRestoreFiles(),

@@ -4086,22 +4086,42 @@ All actual store data (products, inventory counts, stock levels, sales, and cust
 
 ### Critical Rules:
 - **NEVER** search memory or local notes for products, inventory, customers, or sales data.
-- **NEVER** use sessions_spawn or sub-agent calls to query inventory.
-- **ALWAYS** use the pos-system skill to query the database.
+- **NEVER** use the Sub-agent tool or sessions_spawn to query inventory.
+- **ALWAYS** use your **Exec** (shell/run command) tool to run the Python script directly.
 
-### How to use the pos-system skill:
-Invoke the skill as a tool using these exact commands:
+### How to query the database — use your Exec tool with these exact commands:
 
-| What you want | Command |
-|---|---|
-| Count products/sales/customers | \`python3 {baseDir}/scripts/pos.py --action dashboard-summary\` |
-| List all products | \`python3 {baseDir}/scripts/pos.py --action list-products\` |
-| Search products | \`python3 {baseDir}/scripts/pos.py --action list-products --search TERM\` |
-| List customers | \`python3 {baseDir}/scripts/pos.py --action list-customers\` |
-| List sales | \`python3 {baseDir}/scripts/pos.py --action list-sales\` |
-| Stock alerts | \`python3 {baseDir}/scripts/pos.py --action stock-alerts\` |
+**Count products/sales/customers:**
+\`\`\`
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action dashboard-summary
+\`\`\`
 
-The skill runner substitutes \`{baseDir}\` automatically. Use the pos-system skill tool — do not exec node manually.
+**List products:**
+\`\`\`
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-products
+\`\`\`
+
+**Search products:**
+\`\`\`
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-products --search TERM
+\`\`\`
+
+**List customers:**
+\`\`\`
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-customers
+\`\`\`
+
+**List sales:**
+\`\`\`
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-sales
+\`\`\`
+
+**Stock alerts:**
+\`\`\`
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action stock-alerts
+\`\`\`
+
+The environment variables OPENCLAW_API_URL and OPENCLAW_GATEWAY_TOKEN are already set in the shell. Just run the command above using your Exec tool.
 
 ## Personality
 
@@ -4157,8 +4177,27 @@ def main():
     api_url = os.environ.get("OPENCLAW_API_URL", "").strip()
     gateway_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
 
+    # Fallback: auto-discover from openclaw.json when env vars are not set
     if not api_url or not gateway_token:
-        print("Error: OPENCLAW_API_URL and OPENCLAW_GATEWAY_TOKEN must be configured.", file=sys.stderr)
+        try:
+            config_path = "/home/vercel-sandbox/.openclaw/openclaw.json"
+            with open(config_path) as f:
+                config = json.load(f)
+            if not api_url:
+                # Use the first allowed origin as the API base URL
+                origins = config.get("gateway", {}).get("controlUi", {}).get("allowedOrigins", [])
+                if origins:
+                    api_url = origins[0]
+            if not gateway_token:
+                token_file = "/home/vercel-sandbox/.openclaw/auth/gateway.token"
+                if os.path.exists(token_file):
+                    with open(token_file) as f:
+                        gateway_token = f.read().strip()
+        except Exception as e:
+            pass
+
+    if not api_url or not gateway_token:
+        print(f"Error: Could not determine API URL or gateway token. api_url={api_url!r}", file=sys.stderr)
         sys.exit(1)
 
     endpoint = api_url.rstrip("/") + "/api/pos-db"

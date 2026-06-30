@@ -77,7 +77,9 @@ export const OPENCLAW_WORKER_SANDBOX_BATCH_SKILL_PATH = `${OPENCLAW_STATE_DIR}/s
 export const OPENCLAW_WORKER_SANDBOX_BATCH_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/worker-sandbox-batch/scripts/execute-batch.mjs`;
 export const OPENCLAW_POS_SKILL_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/SKILL.md`;
 export const OPENCLAW_POS_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/scripts/pos.mjs`;
-export const OPENCLAW_SOUL_PATH = `${OPENCLAW_STATE_DIR}/agents/main/agent/SOUL.md`;
+export const OPENCLAW_POS_PYTHON_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/scripts/pos.py`;
+export const OPENCLAW_SOUL_PATH = `${OPENCLAW_STATE_DIR}/workspace/SOUL.md`;
+export const OPENCLAW_AGENTS_PATH = `${OPENCLAW_STATE_DIR}/workspace/AGENTS.md`;
 
 // The built-in skill shipped with the openclaw npm package uses a Python
 // gen.py script that requires a direct sk-* OPENAI_API_KEY.  We overwrite
@@ -3693,7 +3695,7 @@ metadata:
   openclaw:
     emoji: "📦"
     requires:
-      bins: ["node"]
+      bins: ["python3"]
       env: []
 ---
 
@@ -3703,35 +3705,34 @@ This skill allows the OpenClaw agent to query, create, update, and manage data d
 
 ## Run
 \`\`\`bash
-node {baseDir}/scripts/pos.mjs --action [action_name] [arguments]
+python3 {baseDir}/scripts/pos.py --action [action_name] [arguments]
 \`\`\`
 
 ## Commands & Actions
 
 ### 1. Catalog Management
-- **List Products**: \`node {baseDir}/scripts/pos.mjs --action list-products [--limit LIMIT] [--page PAGE] [--search SEARCH]\` (use this to check products or count how many products exist)
-- **Get Product Details**: \`node {baseDir}/scripts/pos.mjs --action get-product --id ID\`
-- **Create Product**: \`node {baseDir}/scripts/pos.mjs --action create-product --data JSON_STRING\`
+- **List Products**: \`python3 {baseDir}/scripts/pos.py --action list-products [--limit LIMIT] [--page PAGE] [--search SEARCH]\` (use this to check products or count how many products exist)
+- **Get Product Details**: \`python3 {baseDir}/scripts/pos.py --action get-product --id ID\`
+- **Create Product**: \`python3 {baseDir}/scripts/pos.py --action create-product --data JSON_STRING\`
   - Note: JSON_STRING requires: \`{"name": "...", "code": "...", "type": "is_single", "cost": 10, "price": 15, "category_id": 1, "unit_id": 1, "quantity": 100, "stock_alert": 5}\`
-- **Update Product**: \`node {baseDir}/scripts/pos.mjs --action update-product --id ID --data JSON_STRING\`
-- **Delete Product**: \`node {baseDir}/scripts/pos.mjs --action delete-product --id ID\`
+- **Update Product**: \`python3 {baseDir}/scripts/pos.py --action update-product --id ID --data JSON_STRING\`
+- **Delete Product**: \`python3 {baseDir}/scripts/pos.py --action delete-product --id ID\`
 
 ### 2. Customer Management
-- **List Customers**: \`node {baseDir}/scripts/pos.mjs --action list-customers [--limit LIMIT] [--page PAGE] [--search SEARCH]\`
-- **Create Customer**: \`node {baseDir}/scripts/pos.mjs --action create-customer --data JSON_STRING\`
+- **List Customers**: \`python3 {baseDir}/scripts/pos.py --action list-customers [--limit LIMIT] [--page PAGE] [--search SEARCH]\`
+- **Create Customer**: \`python3 {baseDir}/scripts/pos.py --action create-customer --data JSON_STRING\`
   - Note: JSON_STRING requires: \`{"name": "...", "email": "...", "phone": "...", "country": "...", "city": "...", "adresse": "..."}\`
 
 ### 3. Sales & POS Transactions
-- **List Sales**: \`node {baseDir}/scripts/pos.mjs --action list-sales [--limit LIMIT] [--page PAGE]\`
-- **Get Sale Details**: \`node {baseDir}/scripts/pos.mjs --action get-sale --id ID\`
-- **Create Sale (POS)**: \`node {baseDir}/scripts/pos.mjs --action create-sale --data JSON_STRING\`
+- **List Sales**: \`python3 {baseDir}/scripts/pos.py --action list-sales [--limit LIMIT] [--page PAGE]\`
+- **Get Sale Details**: \`python3 {baseDir}/scripts/pos.py --action get-sale --id ID\`
+- **Create Sale (POS)**: \`python3 {baseDir}/scripts/pos.py --action create-sale --data JSON_STRING\`
   - Note: JSON_STRING structure:
     \`{ "client_id": 1, "warehouse_id": 1, "tax_rate": 0, "discount": 0, "shipping": 0, "notes": "", "payment": { "status": "received", "Reglement": "Cash" }, "details": [ { "product_id": 1, "quantity": 2, "price": 15, "discount": 0 } ] }\`
-  - Generates a beautifully styled HTML invoice printout automatically in sandbox \`/tmp/\` and registers the media path.
 
 ### 4. Reports & Analytics
-- **Dashboard Summary**: \`node {baseDir}/scripts/pos.mjs --action dashboard-summary\` (use this to get total counts of products, sales, and customers)
-- **Stock Alerts**: \`node {baseDir}/scripts/pos.mjs --action stock-alerts\`
+- **Dashboard Summary**: \`python3 {baseDir}/scripts/pos.py --action dashboard-summary\` (use this to get total counts of products, sales, and customers)
+- **Stock Alerts**: \`python3 {baseDir}/scripts/pos.py --action stock-alerts\`
 
 ## Parameters
 
@@ -4082,9 +4083,177 @@ You are the OpenClaw agent for managing this store's Point of Sale (POS) invento
 ## Database & Inventory Instructions
 
 All actual store data (products, inventory counts, stock levels, sales, and customers) is stored in the live POS database.
-- **NEVER** use memory search (\`Memory Search\`) or local notes/workspace files to find information about product lists, counts/quantity of products, customers, or sales.
-- **ALWAYS** query the live database using the \`pos-system\` tool for these questions.
-- To find out how many products, sales, or customers you have, call the \`pos-system\` tool with the \`--action dashboard-summary\` command.
-- To list or search products, call the \`pos-system\` tool with the \`--action list-products\` command.
+
+### Critical Rules:
+- **NEVER** search memory or local notes for products, inventory, customers, or sales data.
+- **NEVER** use sessions_spawn or sub-agent calls to query inventory.
+- **ALWAYS** use the pos-system skill to query the database.
+
+### How to use the pos-system skill:
+Invoke the skill as a tool using these exact commands:
+
+| What you want | Command |
+|---|---|
+| Count products/sales/customers | \`python3 {baseDir}/scripts/pos.py --action dashboard-summary\` |
+| List all products | \`python3 {baseDir}/scripts/pos.py --action list-products\` |
+| Search products | \`python3 {baseDir}/scripts/pos.py --action list-products --search TERM\` |
+| List customers | \`python3 {baseDir}/scripts/pos.py --action list-customers\` |
+| List sales | \`python3 {baseDir}/scripts/pos.py --action list-sales\` |
+| Stock alerts | \`python3 {baseDir}/scripts/pos.py --action stock-alerts\` |
+
+The skill runner substitutes \`{baseDir}\` automatically. Use the pos-system skill tool — do not exec node manually.
+
+## Personality
+
+Be genuinely helpful. Skip filler phrases. Be resourceful before asking questions.
+`;
+}
+
+export function buildAgentsMd(): string {
+  return `# AGENTS.md - Your Workspace
+
+This folder is home. Treat it that way.
+
+## Store Point of Sale (POS) Database Rules
+
+- **NEVER** use memory search (\`Memory Search\`) or local files/notes to find product lists, inventory counts, sales, or customer details.
+- **ALWAYS** query the live database using the \`pos-system\` skill tool.
+- For dashboard/store summary (total counts), use \`--action dashboard-summary\`.
+- For listing/searching products, use \`--action list-products\`.
+- For customers list, use \`--action list-customers\`.
+- For sales summary/alerts, use \`--action stock-alerts\`.
+
+## Memory
+
+You wake up fresh each session. These files are your continuity:
+
+- **Daily notes:** \`memory/YYYY-MM-DD.md\` (create \`memory/\` if needed) — raw logs of what happened
+- **Long-term:** \`MEMORY.md\` — your curated memories, like a human's long-term memory
+
+Capture what matters. Decisions, context, things to remember. Skip the secrets unless asked to keep them.
+`;
+}
+
+export function buildPosPythonScript(): string {
+  return `#!/usr/bin/env python3
+"""POS system CLI - queries the live POS database via the internal API."""
+import argparse
+import json
+import os
+import sys
+import urllib.request
+import urllib.error
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--action", required=True)
+    parser.add_argument("--id", dest="id_")
+    parser.add_argument("--data")
+    parser.add_argument("--limit", default="10")
+    parser.add_argument("--page", default="1")
+    parser.add_argument("--search", default="")
+    args = parser.parse_args()
+
+    api_url = os.environ.get("OPENCLAW_API_URL", "").strip()
+    gateway_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+
+    if not api_url or not gateway_token:
+        print("Error: OPENCLAW_API_URL and OPENCLAW_GATEWAY_TOKEN must be configured.", file=sys.stderr)
+        sys.exit(1)
+
+    endpoint = api_url.rstrip("/") + "/api/pos-db"
+
+    def api_fetch(action_name, payload=None):
+        if payload is None:
+            payload = {}
+        body = json.dumps({"action": action_name, "data": payload}).encode()
+        req = urllib.request.Request(
+            endpoint,
+            data=body,
+            headers={
+                "Authorization": "Bearer " + gateway_token,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode()
+            print(f"HTTP Error {e.code}: {body_text}", file=sys.stderr)
+            sys.exit(1)
+
+    action = args.action
+
+    if action == "dashboard-summary":
+        data = api_fetch("dashboard-summary")
+        print(json.dumps(data, indent=2))
+
+    elif action == "list-products":
+        data = api_fetch("list-products", {"limit": args.limit, "page": args.page, "search": args.search})
+        print(json.dumps(data, indent=2))
+
+    elif action == "get-product":
+        if not args.id_:
+            print("Error: --id is required", file=sys.stderr); sys.exit(1)
+        data = api_fetch("get-product", {"id": args.id_})
+        print(json.dumps(data, indent=2))
+
+    elif action == "create-product":
+        if not args.data:
+            print("Error: --data (JSON string) is required", file=sys.stderr); sys.exit(1)
+        data = api_fetch("create-product", {"data": json.loads(args.data)})
+        print(json.dumps(data, indent=2))
+
+    elif action == "update-product":
+        if not args.id_ or not args.data:
+            print("Error: --id and --data are required", file=sys.stderr); sys.exit(1)
+        data = api_fetch("update-product", {"id": args.id_, "data": json.loads(args.data)})
+        print(json.dumps(data, indent=2))
+
+    elif action == "delete-product":
+        if not args.id_:
+            print("Error: --id is required", file=sys.stderr); sys.exit(1)
+        data = api_fetch("delete-product", {"id": args.id_})
+        print(json.dumps(data, indent=2))
+
+    elif action == "list-customers":
+        data = api_fetch("list-customers", {"limit": args.limit, "page": args.page, "search": args.search})
+        print(json.dumps(data, indent=2))
+
+    elif action == "create-customer":
+        if not args.data:
+            print("Error: --data (JSON string) is required", file=sys.stderr); sys.exit(1)
+        data = api_fetch("create-customer", {"data": json.loads(args.data)})
+        print(json.dumps(data, indent=2))
+
+    elif action == "list-sales":
+        data = api_fetch("list-sales", {"limit": args.limit, "page": args.page})
+        print(json.dumps(data, indent=2))
+
+    elif action == "get-sale":
+        if not args.id_:
+            print("Error: --id is required", file=sys.stderr); sys.exit(1)
+        data = api_fetch("get-sale", {"id": args.id_})
+        print(json.dumps(data, indent=2))
+
+    elif action == "create-sale":
+        if not args.data:
+            print("Error: --data (JSON string) is required", file=sys.stderr); sys.exit(1)
+        data = api_fetch("create-sale", {"data": json.loads(args.data)})
+        print(json.dumps(data, indent=2))
+
+    elif action == "stock-alerts":
+        data = api_fetch("stock-alerts")
+        print(json.dumps(data, indent=2))
+
+    else:
+        print(f"Unknown action: {action}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
 `;
 }

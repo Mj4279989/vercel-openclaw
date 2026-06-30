@@ -84,25 +84,26 @@ test("static restore files produce non-empty buffers", () => {
 
 // --- buildDynamicRestoreFiles ---
 
-test("dynamic restore files only contain openclaw.json with the provided origin", () => {
+test("dynamic restore files contain openclaw.json with the provided origin", () => {
   const files = buildDynamicRestoreFiles({
     proxyOrigin: "https://example.test",
   });
 
-  assert.equal(files.length, 1);
-  assert.equal(files[0]!.path, OPENCLAW_CONFIG_PATH);
+  assert.equal(files.length, 3);
+  const configFile = files.find((f) => f.path === OPENCLAW_CONFIG_PATH);
+  assert.ok(configFile, "Expected OPENCLAW_CONFIG_PATH in dynamic restore files");
 
-  const content = files[0]!.content.toString("utf8");
+  const content = configFile.content.toString("utf8");
   assert.ok(content.includes("https://example.test"));
 });
 
-test("dynamic restore files contain only config", () => {
+test("dynamic restore files contain config and auth credentials", () => {
   const files = buildDynamicRestoreFiles({
     proxyOrigin: "https://no-key.test",
   });
 
-  assert.equal(files.length, 1);
-  assert.equal(files[0]!.path, OPENCLAW_CONFIG_PATH);
+  assert.equal(files.length, 3);
+  assert.ok(files.some((f) => f.path === OPENCLAW_CONFIG_PATH));
 });
 
 test("dynamic restore files include telegram webhookSecret in openclaw config", () => {

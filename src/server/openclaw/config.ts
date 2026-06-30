@@ -77,6 +77,7 @@ export const OPENCLAW_WORKER_SANDBOX_BATCH_SKILL_PATH = `${OPENCLAW_STATE_DIR}/s
 export const OPENCLAW_WORKER_SANDBOX_BATCH_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/worker-sandbox-batch/scripts/execute-batch.mjs`;
 export const OPENCLAW_POS_SKILL_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/SKILL.md`;
 export const OPENCLAW_POS_SCRIPT_PATH = `${OPENCLAW_STATE_DIR}/skills/pos-system/scripts/pos.mjs`;
+export const OPENCLAW_SOUL_PATH = `${OPENCLAW_STATE_DIR}/agents/main/agent/SOUL.md`;
 
 // The built-in skill shipped with the openclaw npm package uses a Python
 // gen.py script that requires a direct sk-* OPENAI_API_KEY.  We overwrite
@@ -3686,7 +3687,7 @@ echo ""
 export function buildPosSkill(): string {
   return `---
 name: pos-system
-description: Manage products, sales, customers, stock alerts, and generate receipt bills on the database.
+description: Query and manage the live POS store database. Use this tool for any questions about products, inventory, counts/lists of products, sales, customers, stock alerts, and receipts.
 user-invocable: true
 metadata:
   openclaw:
@@ -3708,7 +3709,7 @@ node {baseDir}/scripts/pos.mjs --action [action_name] [arguments]
 ## Commands & Actions
 
 ### 1. Catalog Management
-- **List Products**: \`node {baseDir}/scripts/pos.mjs --action list-products [--limit LIMIT] [--page PAGE] [--search SEARCH]\`
+- **List Products**: \`node {baseDir}/scripts/pos.mjs --action list-products [--limit LIMIT] [--page PAGE] [--search SEARCH]\` (use this to check products or count how many products exist)
 - **Get Product Details**: \`node {baseDir}/scripts/pos.mjs --action get-product --id ID\`
 - **Create Product**: \`node {baseDir}/scripts/pos.mjs --action create-product --data JSON_STRING\`
   - Note: JSON_STRING requires: \`{"name": "...", "code": "...", "type": "is_single", "cost": 10, "price": 15, "category_id": 1, "unit_id": 1, "quantity": 100, "stock_alert": 5}\`
@@ -3729,7 +3730,7 @@ node {baseDir}/scripts/pos.mjs --action [action_name] [arguments]
   - Generates a beautifully styled HTML invoice printout automatically in sandbox \`/tmp/\` and registers the media path.
 
 ### 4. Reports & Analytics
-- **Dashboard Summary**: \`node {baseDir}/scripts/pos.mjs --action dashboard-summary\`
+- **Dashboard Summary**: \`node {baseDir}/scripts/pos.mjs --action dashboard-summary\` (use this to get total counts of products, sales, and customers)
 - **Stock Alerts**: \`node {baseDir}/scripts/pos.mjs --action stock-alerts\`
 
 ## Parameters
@@ -4070,5 +4071,20 @@ try {
   console.error("Execution Error: " + error.message);
   process.exit(1);
 }
+`;
+}
+
+export function buildSoulMd(): string {
+  return `# SOUL.md - Your Core Identity and Instructions
+
+You are the OpenClaw agent for managing this store's Point of Sale (POS) inventory system.
+
+## Database & Inventory Instructions
+
+All actual store data (products, inventory counts, stock levels, sales, and customers) is stored in the live POS database.
+- **NEVER** use memory search (\`Memory Search\`) or local notes/workspace files to find information about product lists, counts/quantity of products, customers, or sales.
+- **ALWAYS** query the live database using the \`pos-system\` tool for these questions.
+- To find out how many products, sales, or customers you have, call the \`pos-system\` tool with the \`--action dashboard-summary\` command.
+- To list or search products, call the \`pos-system\` tool with the \`--action list-products\` command.
 `;
 }

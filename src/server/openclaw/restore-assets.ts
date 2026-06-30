@@ -36,6 +36,7 @@ import {
   buildWebSearchSkill,
   buildPosScript,
   buildPosSkill,
+  buildSoulMd,
   OPENCLAW_BUILTIN_IMAGE_GEN_SCRIPT_PATH,
   OPENCLAW_BUILTIN_IMAGE_GEN_SKILL_PATH,
   OPENCLAW_CONFIG_PATH,
@@ -72,6 +73,7 @@ import {
   OPENCLAW_WEB_SEARCH_SKILL_PATH,
   OPENCLAW_POS_SCRIPT_PATH,
   OPENCLAW_POS_SKILL_PATH,
+  OPENCLAW_SOUL_PATH,
 } from "@/server/openclaw/config";
 
 export const OPENCLAW_RESTORE_ASSET_MANIFEST_PATH =
@@ -138,6 +140,7 @@ export function buildStaticRestoreFiles(): { path: string; content: Buffer }[] {
     { path: OPENCLAW_COMPARE_SCRIPT_PATH, content: Buffer.from(buildCompareScript()) },
     { path: OPENCLAW_POS_SKILL_PATH, content: Buffer.from(buildPosSkill()) },
     { path: OPENCLAW_POS_SCRIPT_PATH, content: Buffer.from(buildPosScript()) },
+    { path: OPENCLAW_SOUL_PATH, content: Buffer.from(buildSoulMd()) },
     ...buildWorkerSandboxRestoreFiles(),
   ];
 }

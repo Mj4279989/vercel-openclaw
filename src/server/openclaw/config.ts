@@ -4170,8 +4170,8 @@ def generate_receipt_html(sale, details):
             f"<tr>"
             f"<td style=\\"padding: 6px 0;\\">{{p_name}}<br/><span style=\\"font-size: 11px; color: #666;\\">{{p_code}}</span></td>"
             f"<td style=\\"text-align: center; padding: 6px 0;\\">{{qty:.0f}}</td>"
-            f"<td style=\\"text-align: right; padding: 6px 0;\\">${{price:.2f}}</td>"
-            f"<td style=\\"text-align: right; padding: 6px 0;\\">${{total:.2f}}</td>"
+            f"<td style=\\"text-align: right; padding: 6px 0;\\">\${{price:.2f}}</td>"
+            f"<td style=\\"text-align: right; padding: 6px 0;\\">\${{total:.2f}}</td>"
             f"</tr>"
         )
     discount = float(sale.get("discount") or 0)
@@ -4316,24 +4316,24 @@ def generate_receipt_html(sale, details):
       <table>
         <tr>
           <td>Subtotal:</td>
-          <td style="text-align: right;">${{subtotal:.2f}}</td>
+          <td style="text-align: right;">\${{subtotal:.2f}}</td>
         </tr>
 """
     if discount > 0:
         html += f"""        <tr>
           <td>Discount:</td>
-          <td style="text-align: right;">-${{discount:.2f}}</td>
+          <td style="text-align: right;">-\${{discount:.2f}}</td>
         </tr>
 """
     if shipping > 0:
         html += f"""        <tr>
           <td>Shipping:</td>
-          <td style="text-align: right;">${{shipping:.2f}}</td>
+          <td style="text-align: right;">\${{shipping:.2f}}</td>
         </tr>
 """
     html += f"""        <tr class="grand-total">
           <td><strong>Grand Total:</strong></td>
-          <td style="text-align: right;"><strong>${{grand_total:.2f}}</strong></td>
+          <td style="text-align: right;"><strong>\${{grand_total:.2f}}</strong></td>
         </tr>
       </table>
     </div>

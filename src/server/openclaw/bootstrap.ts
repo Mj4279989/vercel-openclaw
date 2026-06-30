@@ -598,9 +598,7 @@ export async function setupOpenClaw(
       args: [
         "-c",
         [
-          "set -e",
-          "OC_PKG=/home/vercel-sandbox/.global/npm/lib/node_modules/openclaw",
-          "sed -i 's/if (\\/^https?:\\\\/\\\\/\\/i.test(candidate)) return true;/if (\\/^https?:\\\\/\\\\/\\/i.test(candidate) || \\/^data:/i.test(candidate)) return true;/g' $OC_PKG/dist/parse-*.js",
+          "node -e 'const fs = require(\"fs\"); const dir = \"/home/vercel-sandbox/.global/npm/lib/node_modules/openclaw/dist\"; const files = fs.readdirSync(dir).filter(f => f.startsWith(\"parse-\") && f.endsWith(\".js\")); for (const f of files) { const fp = dir + \"/\" + f; let c = fs.readFileSync(fp, \"utf8\"); const t = \"if (/^https?:\\\\/\\\\/i.test(candidate)) return true;\"; const r = \"if (/^https?:\\\\/\\\\/i.test(candidate) || /^data:/i.test(candidate)) return true;\"; if (c.includes(t)) { fs.writeFileSync(fp, c.replace(t, r), \"utf8\"); console.log(\"Patched\", f); } }'",
         ].join(" && "),
       ],
     });

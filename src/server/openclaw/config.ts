@@ -4089,39 +4089,33 @@ All actual store data (products, inventory counts, stock levels, sales, and cust
 - **NEVER** use the Sub-agent tool or sessions_spawn to query inventory.
 - **ALWAYS** use your **Exec** (shell/run command) tool to run the Python script directly.
 
-### How to query the database — use your Exec tool with these exact commands:
+### Exact commands to use via your Exec tool:
 
-**Count products/sales/customers:**
-\`\`\`
-python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action dashboard-summary
-\`\`\`
+**1. General Queries**
+* Count products/sales/customers:
+  \`python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action dashboard-summary\`
+* List products:
+  \`python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-products\`
+* Search products:
+  \`python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-products --search TERM\`
+* List customers:
+  \`python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-customers\`
+* List sales:
+  \`python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-sales\`
+* Stock alerts:
+  \`python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action stock-alerts\`
 
-**List products:**
+**2. Register / Create a Customer**
+Use \`--action create-customer\` and pass the client details as a single JSON string in \`--data\`:
 \`\`\`
-python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-products
-\`\`\`
-
-**Search products:**
-\`\`\`
-python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-products --search TERM
-\`\`\`
-
-**List customers:**
-\`\`\`
-python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-customers
-\`\`\`
-
-**List sales:**
-\`\`\`
-python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action list-sales
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action create-customer --data '{"name": "CLIENT_NAME", "email": "EMAIL_ADDRESS", "phone": "PHONE_NUMBER", "country": "COUNTRY", "city": "CITY", "adresse": "ADDRESS"}'
 \`\`\`
 
-**Stock alerts:**
+**3. Process / Create a Sale (Purchase)**
+Use \`--action create-sale\` and pass sale details in \`--data\`. The script automatically generates a bill/invoice file and prints the media path so the user gets it.
 \`\`\`
-python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action stock-alerts
+python3 /home/vercel-sandbox/.openclaw/skills/pos-system/scripts/pos.py --action create-sale --data '{"client_id": CLIENT_ID, "warehouse_id": WAREHOUSE_ID, "tax_rate": 0, "discount": 0, "shipping": 0, "notes": "", "payment": {"status": "received", "Reglement": "Cash"}, "details": [{"product_id": PRODUCT_ID, "quantity": QTY, "price": PRICE, "discount": 0}]}'
 \`\`\`
-
-The environment variables OPENCLAW_API_URL and OPENCLAW_GATEWAY_TOKEN are already set in the shell. Just run the command above using your Exec tool.
 
 ## Personality
 
@@ -4163,6 +4157,194 @@ import os
 import sys
 import urllib.request
 import urllib.error
+
+def generate_receipt_html(sale, details):
+    items_html = ""
+    for item in details:
+        p_name = item.get("product_name", "")
+        p_code = item.get("product_code", "")
+        qty = float(item.get("quantity", 0))
+        price = float(item.get("price", 0))
+        total = float(item.get("total", 0))
+        items_html += (
+            f"<tr>"
+            f"<td style=\\"padding: 6px 0;\\">{{p_name}}<br/><span style=\\"font-size: 11px; color: #666;\\">{{p_code}}</span></td>"
+            f"<td style=\\"text-align: center; padding: 6px 0;\\">{{qty:.0f}}</td>"
+            f"<td style=\\"text-align: right; padding: 6px 0;\\">${{price:.2f}}</td>"
+            f"<td style=\\"text-align: right; padding: 6px 0;\\">${{total:.2f}}</td>"
+            f"</tr>"
+        )
+    discount = float(sale.get("discount") or 0)
+    shipping = float(sale.get("shipping") or 0)
+    grand_total = float(sale.get("GrandTotal") or 0)
+    subtotal = grand_total + discount - shipping
+    
+    phone_row = ""
+    if sale.get("client_phone"):
+        phone_row = f"<tr><td><strong>Phone:</strong></td><td style=\\"text-align: right;\\">{{sale['client_phone']}}</td></tr>"
+        
+    client_name = sale.get("client_name") or "Walk-in Customer"
+    wh_name = sale.get("warehouse_name") or "Main Warehouse"
+    ref = sale.get("Ref", "")
+    date_str = sale.get("date", "")
+    
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Invoice - {{ref}}</title>
+  <style>
+    body {{
+      font-family: 'Courier New', Courier, monospace;
+      color: #000;
+      background: #fff;
+      margin: 0;
+      padding: 20px;
+      font-size: 14px;
+    }}
+    .receipt {{
+      max-width: 380px;
+      margin: 0 auto;
+      padding: 15px;
+      border: 1px dashed #ccc;
+    }}
+    .header {{
+      text-align: center;
+      margin-bottom: 20px;
+    }}
+    .header h2 {{
+      margin: 0 0 5px 0;
+      font-size: 20px;
+      letter-spacing: 1px;
+    }}
+    .header p {{
+      margin: 0;
+      font-size: 12px;
+      color: #555;
+    }}
+    .info {{
+      margin-bottom: 15px;
+      border-bottom: 1px dashed #000;
+      padding-bottom: 10px;
+      font-size: 12px;
+      line-height: 1.4;
+    }}
+    .info table {{
+      width: 100%;
+    }}
+    .items-table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 15px;
+    }}
+    .items-table th {{
+      border-bottom: 1px solid #000;
+      padding-bottom: 5px;
+      font-size: 12px;
+    }}
+    .items-table td {{
+      font-size: 13px;
+    }}
+    .totals {{
+      border-top: 1px dashed #000;
+      padding-top: 10px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }}
+    .totals table {{
+      width: 100%;
+    }}
+    .totals td {{
+      padding: 3px 0;
+    }}
+    .totals .grand-total {{
+      font-weight: bold;
+      font-size: 15px;
+      border-top: 1px solid #000;
+      padding-top: 6px;
+    }}
+    .footer {{
+      text-align: center;
+      font-size: 12px;
+      margin-top: 25px;
+      border-top: 1px dashed #ccc;
+      padding-top: 15px;
+    }}
+  </style>
+</head>
+<body>
+  <div class="receipt">
+    <div class="header">
+      <h2>VENZURES POS</h2>
+      <p>Smart Inventory & Sales System</p>
+    </div>
+    <div class="info">
+      <table>
+        <tr>
+          <td><strong>Invoice Ref:</strong></td>
+          <td style="text-align: right;">{{ref}}</td>
+        </tr>
+        <tr>
+          <td><strong>Date:</strong></td>
+          <td style="text-align: right;">{{date_str}}</td>
+        </tr>
+        <tr>
+          <td><strong>Customer:</strong></td>
+          <td style="text-align: right;">{{client_name}}</td>
+        </tr>
+        {{phone_row}}
+        <tr>
+          <td><strong>Warehouse:</strong></td>
+          <td style="text-align: right;">{{wh_name}}</td>
+        </tr>
+      </table>
+    </div>
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th style="text-align: left;">Item</th>
+          <th style="text-align: center; width: 40px;">Qty</th>
+          <th style="text-align: right; width: 70px;">Price</th>
+          <th style="text-align: right; width: 70px;">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{items_html}}
+      </tbody>
+    </table>
+    <div class="totals">
+      <table>
+        <tr>
+          <td>Subtotal:</td>
+          <td style="text-align: right;">${{subtotal:.2f}}</td>
+        </tr>
+"""
+    if discount > 0:
+        html += f"""        <tr>
+          <td>Discount:</td>
+          <td style="text-align: right;">-${{discount:.2f}}</td>
+        </tr>
+"""
+    if shipping > 0:
+        html += f"""        <tr>
+          <td>Shipping:</td>
+          <td style="text-align: right;">${{shipping:.2f}}</td>
+        </tr>
+"""
+    html += f"""        <tr class="grand-total">
+          <td><strong>Grand Total:</strong></td>
+          <td style="text-align: right;"><strong>${{grand_total:.2f}}</strong></td>
+        </tr>
+      </table>
+    </div>
+    <div class="footer">
+      <p>Thank you for your purchase!</p>
+      <p style="font-size: 10px; color: #777;">Powered by OpenClaw AI POS</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return html
 
 def main():
     parser = argparse.ArgumentParser()
@@ -4283,6 +4465,20 @@ def main():
             print("Error: --data (JSON string) is required", file=sys.stderr); sys.exit(1)
         data = api_fetch("create-sale", {"data": json.loads(args.data)})
         print(json.dumps(data, indent=2))
+        
+        # Generate the beautiful bill/receipt and write it
+        sale = data.get("sale")
+        details = data.get("details")
+        if sale and details:
+            try:
+                receipt_html = generate_receipt_html(sale, details)
+                filename = "receipt_" + str(sale.get("Ref") or sale.get("id")) + ".html"
+                filepath = "/tmp/" + filename
+                with open(filepath, "w") as f:
+                    f.write(receipt_html)
+                print("MEDIA:" + filename)
+            except Exception as e:
+                print(f"Error generating receipt: {e}", file=sys.stderr)
 
     elif action == "stock-alerts":
         data = api_fetch("stock-alerts")

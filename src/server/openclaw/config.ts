@@ -4594,49 +4594,45 @@ def generate_receipt_pdf_reportlab(sale, details, pdf_filepath, logo_path=None):
     company_email = "admin@example.com"
     company_adr = "Bhopal"
     
-    bill_to_header = Table([[Paragraph("Bill To", section_title_style)]], colWidths=[255], rowHeights=[20])
-    bill_to_header.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#1a56db')),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('LEFTPADDING', (0,0), (-1,-1), 8),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2),
-    ]))
-    
     bill_to_body_text = f"<b>{client_name}</b><br/>Phone: {client_phone}<br/>Email: {client_email}<br/>Address: {client_adr}"
-    bill_to_body = Table([[Paragraph(bill_to_body_text, info_text_style)]], colWidths=[255])
-    bill_to_body.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#f9fafb')),
-        ('BOX', (0,0), (0,0), 0.5, colors.HexColor('#e5e7eb')),
-        ('TOPPADDING', (0,0), (-1,-1), 6),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    bill_to_data = [
+        [Paragraph("Bill To", section_title_style)],
+        [Paragraph(bill_to_body_text, info_text_style)]
+    ]
+    bill_to_table = Table(bill_to_data, colWidths=[255])
+    bill_to_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#1a56db')),
+        ('BACKGROUND', (0,1), (0,1), colors.HexColor('#f9fafb')),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (0,0), 4),
+        ('BOTTOMPADDING', (0,0), (0,0), 4),
+        ('TOPPADDING', (0,1), (0,1), 8),
+        ('BOTTOMPADDING', (0,1), (0,1), 8),
         ('LEFTPADDING', (0,0), (-1,-1), 8),
         ('RIGHTPADDING', (0,0), (-1,-1), 8),
-    ]))
-    
-    bill_to_flow = KeepTogether([bill_to_header, bill_to_body])
-    
-    from_header = Table([[Paragraph("From", section_title_style)]], colWidths=[255], rowHeights=[20])
-    from_header.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#1a56db')),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('LEFTPADDING', (0,0), (-1,-1), 8),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2),
     ]))
     
     from_body_text = f"<b>{company_name}</b><br/>Phone: {company_phone}<br/>Email: {company_email}<br/>Address: {company_adr}"
-    from_body = Table([[Paragraph(from_body_text, info_text_style)]], colWidths=[255])
-    from_body.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#f9fafb')),
-        ('BOX', (0,0), (0,0), 0.5, colors.HexColor('#e5e7eb')),
-        ('TOPPADDING', (0,0), (-1,-1), 6),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    from_data = [
+        [Paragraph("From", section_title_style)],
+        [Paragraph(from_body_text, info_text_style)]
+    ]
+    from_table = Table(from_data, colWidths=[255])
+    from_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,0), colors.HexColor('#1a56db')),
+        ('BACKGROUND', (0,1), (0,1), colors.HexColor('#f9fafb')),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (0,0), 4),
+        ('BOTTOMPADDING', (0,0), (0,0), 4),
+        ('TOPPADDING', (0,1), (0,1), 8),
+        ('BOTTOMPADDING', (0,1), (0,1), 8),
         ('LEFTPADDING', (0,0), (-1,-1), 8),
         ('RIGHTPADDING', (0,0), (-1,-1), 8),
     ]))
     
-    from_flow = KeepTogether([from_header, from_body])
-    
-    info_table = Table([[bill_to_flow, "", from_flow]], colWidths=[255, 25, 255])
+    info_table = Table([[bill_to_table, "", from_table]], colWidths=[255, 25, 255])
     info_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),

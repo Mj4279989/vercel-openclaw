@@ -591,6 +591,28 @@ export async function setupOpenClaw(
       logInfo("openclaw.bootstrap.peer_deps_ready", { sandboxId: sandbox.sandboxId, package: "@buape/carbon" });
     }
 
+    // Apply patch to the global openclaw parser to support data: URIs (e.g. base64-encoded PDFs)
+    progress?.setPhase("patching-openclaw", "Applying parser patches to openclaw");
+    const patchResult = await sandbox.runCommand({
+      cmd: "bash",
+      args: [
+        "-c",
+        [
+          "set -e",
+          "OC_PKG=/home/vercel-sandbox/.global/npm/lib/node_modules/openclaw",
+          "sed -i 's/if (\\/^https?:\\\\/\\\\/\\/i.test(candidate)) return true;/if (\\/^https?:\\\\/\\\\/\\/i.test(candidate) || \\/^data:/i.test(candidate)) return true;/g' $OC_PKG/dist/parse-*.js",
+        ].join(" && "),
+      ],
+    });
+    if (patchResult.exitCode !== 0) {
+      logWarn("openclaw.setup.patch_failed", {
+        sandboxId: sandbox.sandboxId,
+        exitCode: patchResult.exitCode,
+      });
+    } else {
+      logInfo("openclaw.bootstrap.patch_success", { sandboxId: sandbox.sandboxId });
+    }
+
     // Install Bun for faster gateway startup on snapshot restore.
     // Bun's JSC engine loads the 577MB/10K-file openclaw package ~33% faster
     // than Node.js v22 on 1 vCPU.  Best-effort — restore falls back to Node

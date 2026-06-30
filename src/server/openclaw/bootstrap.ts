@@ -344,7 +344,7 @@ export async function setupOpenClaw(
           // Prefer the real API key when available (env var); fall back to the
           // placeholder only on Vercel production where the firewall injects it.
           `mkdir -p /home/vercel-sandbox/.openclaw/agents/main/agent`,
-          `printf '%s' '${JSON.stringify({ version: 1, profiles: { "vercel-ai-gateway:default": { type: "api_key", provider: "vercel-ai-gateway", key: process.env.AI_GATEWAY_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || "sk-placeholder-injected-via-network-policy" } } })}' > /home/vercel-sandbox/.openclaw/agents/main/agent/auth-profiles.json`,
+          `printf '%s' '${JSON.stringify({ version: 1, profiles: { "vercel-ai-gateway:default": { type: "api_key", provider: "vercel-ai-gateway", key: process.env.AI_GATEWAY_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || "sk-placeholder-injected-via-network-policy" }, "openai:default": { type: "api_key", provider: "openai", key: process.env.AI_GATEWAY_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || "sk-placeholder-injected-via-network-policy" } } })}' > /home/vercel-sandbox/.openclaw/agents/main/agent/auth-profiles.json`,
         ].join(" && "),
       ],
       stdout: progress?.makeWritable("stdout"),

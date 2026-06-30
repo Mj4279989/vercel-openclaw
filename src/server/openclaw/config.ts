@@ -3690,6 +3690,7 @@ metadata:
     emoji: "📦"
     requires:
       bins: ["node"]
+      env: []
 ---
 
 # Direct DB POS Management System
@@ -3727,6 +3728,15 @@ node {baseDir}/scripts/pos.mjs --action [action_name] [arguments]
 ### 4. Reports & Analytics
 - **Dashboard Summary**: \`node {baseDir}/scripts/pos.mjs --action dashboard-summary\`
 - **Stock Alerts**: \`node {baseDir}/scripts/pos.mjs --action stock-alerts\`
+
+## Parameters
+
+- \`--action\` (required): The database action to perform: list-products, get-product, create-product, update-product, delete-product, list-sales, get-sale, create-sale, list-customers, create-customer, dashboard-summary, stock-alerts.
+- \`--id\`: The ID of the product or sale.
+- \`--data\`: A JSON string containing payload data.
+- \`--limit\`: Max number of items to return.
+- \`--page\`: Page number for pagination.
+- \`--search\`: Search query string.
 `;
 }
 

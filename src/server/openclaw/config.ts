@@ -591,12 +591,15 @@ export function buildGatewayConfig(
   const openAiBaseUrl = process.env.AI_GATEWAY_API_KEY?.trim()
     ? AI_GATEWAY_BASE_URL
     : (process.env.OPENAI_API_KEY?.trim() ? "https://api.openai.com/v1" : AI_GATEWAY_BASE_URL);
+  const openAiApiKey = process.env.AI_GATEWAY_API_KEY?.trim()
+    ? "sk-placeholder"
+    : (process.env.OPENAI_API_KEY?.trim() || "sk-placeholder");
   config.models = {
     mode: "merge",
     providers: {
       openai: {
         baseUrl: openAiBaseUrl,
-        apiKey: "sk-placeholder",
+        apiKey: openAiApiKey,
         api: "openai-completions",
         models: [
           { id: "gpt-image-1", name: "GPT Image 1" },

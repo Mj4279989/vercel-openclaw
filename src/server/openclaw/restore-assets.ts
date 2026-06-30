@@ -171,6 +171,32 @@ export function buildDynamicRestoreFiles(options: {
         "sk-placeholder-injected-via-network-policy"
       ),
     },
+    {
+      path: `${OPENCLAW_STATE_DIR}/agents/main/agent/auth-profiles.json`,
+      content: Buffer.from(
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "vercel-ai-gateway:default": {
+              type: "api_key",
+              provider: "vercel-ai-gateway",
+              key:
+                process.env.AI_GATEWAY_API_KEY?.trim() ||
+                process.env.OPENAI_API_KEY?.trim() ||
+                "sk-placeholder-injected-via-network-policy",
+            },
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key:
+                process.env.AI_GATEWAY_API_KEY?.trim() ||
+                process.env.OPENAI_API_KEY?.trim() ||
+                "sk-placeholder-injected-via-network-policy",
+            },
+          },
+        })
+      ),
+    },
   ];
 
   if (options.telegramBotToken) {

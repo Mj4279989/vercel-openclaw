@@ -87,21 +87,29 @@ export async function POST(request: Request): Promise<Response> {
           WHERE p.deleted_at IS NULL
         `;
         const params: any[] = [];
+        let searchClause = "";
 
         if (search) {
-          query += ` AND (p.name LIKE ? OR p.code LIKE ? OR c.name LIKE ?)`;
-          const wildcard = `%${search}%`;
-          params.push(wildcard, wildcard, wildcard);
+          const keywords = search.trim().split(/\s+/).filter((k: string) => k.length > 0);
+          if (keywords.length > 0) {
+            searchClause = " AND (" + keywords.map(() => "(p.name LIKE ? OR p.code LIKE ? OR c.name LIKE ?)").join(" AND ") + ")";
+            for (const keyword of keywords) {
+              const wildcard = `%${keyword}%`;
+              params.push(wildcard, wildcard, wildcard);
+            }
+          }
+        }
+
+        if (searchClause) {
+          query += searchClause;
         }
 
         query += ` GROUP BY p.id ORDER BY p.id DESC`;
 
         // Get total count
         const [countRows]: any = await db.query(
-          `SELECT COUNT(DISTINCT p.id) as total FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.deleted_at IS NULL ${
-            search ? " AND (p.name LIKE ? OR p.code LIKE ? OR c.name LIKE ?)" : ""
-          }`,
-          search ? params : []
+          `SELECT COUNT(DISTINCT p.id) as total FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.deleted_at IS NULL ${searchClause}`,
+          params
         );
         const totalRows = countRows[0]?.total || 0;
 
@@ -457,11 +465,21 @@ export async function POST(request: Request): Promise<Response> {
 
         let query = "SELECT * FROM clients WHERE deleted_at IS NULL";
         const params: any[] = [];
+        let searchClause = "";
 
         if (search) {
-          query += " AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)";
-          const wildcard = `%${search}%`;
-          params.push(wildcard, wildcard, wildcard);
+          const keywords = search.trim().split(/\s+/).filter((k: string) => k.length > 0);
+          if (keywords.length > 0) {
+            searchClause = " AND (" + keywords.map(() => "(name LIKE ? OR email LIKE ? OR phone LIKE ?)").join(" AND ") + ")";
+            for (const keyword of keywords) {
+              const wildcard = `%${keyword}%`;
+              params.push(wildcard, wildcard, wildcard);
+            }
+          }
+        }
+
+        if (searchClause) {
+          query += searchClause;
         }
 
         query += " ORDER BY id DESC LIMIT ? OFFSET ?";
@@ -469,11 +487,10 @@ export async function POST(request: Request): Promise<Response> {
 
         const [clients]: any = await db.query(query, params);
 
+        const countParams = searchClause ? params.slice(0, params.length - 2) : [];
         const [countRows]: any = await db.query(
-          `SELECT COUNT(*) as total FROM clients WHERE deleted_at IS NULL ${
-            search ? " AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)" : ""
-          }`,
-          search ? params.slice(0, 3) : []
+          `SELECT COUNT(*) as total FROM clients WHERE deleted_at IS NULL ${searchClause}`,
+          countParams
         );
         const totalRows = countRows[0]?.total || 0;
 

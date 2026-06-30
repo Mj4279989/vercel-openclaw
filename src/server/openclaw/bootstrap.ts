@@ -340,11 +340,11 @@ export async function setupOpenClaw(
           // auth-profiles.json — pre-seed the vercel-ai-gateway provider so
           // chat doesn't fail with "No API key found for provider". The
           // bundle doesn't include the vercel-ai-gateway extension at runtime,
-          // so the env-var-to-auth-profile bootstrap doesn't run. The key is a
-          // placeholder; the real OIDC token is injected by the firewall's
-          // network policy header transform on the way to ai-gateway.vercel.sh.
+          // so the env-var-to-auth-profile bootstrap doesn't run.
+          // Prefer the real API key when available (env var); fall back to the
+          // placeholder only on Vercel production where the firewall injects it.
           `mkdir -p /home/vercel-sandbox/.openclaw/agents/main/agent`,
-          `printf '%s' '{"version":1,"profiles":{"vercel-ai-gateway:default":{"type":"api_key","provider":"vercel-ai-gateway","key":"sk-placeholder-injected-via-network-policy"}}}' > /home/vercel-sandbox/.openclaw/agents/main/agent/auth-profiles.json`,
+          `printf '%s' '${JSON.stringify({ version: 1, profiles: { "vercel-ai-gateway:default": { type: "api_key", provider: "vercel-ai-gateway", key: process.env.AI_GATEWAY_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || "sk-placeholder-injected-via-network-policy" } } })}' > /home/vercel-sandbox/.openclaw/agents/main/agent/auth-profiles.json`,
         ].join(" && "),
       ],
       stdout: progress?.makeWritable("stdout"),

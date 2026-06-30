@@ -213,7 +213,7 @@ export async function resolveAiGatewayCredentialOptional(): Promise<AiGatewayCre
   }
 
   // Static API key.
-  const staticKey = process.env.AI_GATEWAY_API_KEY?.trim();
+  const staticKey = process.env.AI_GATEWAY_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim();
   if (staticKey) {
     return { token: staticKey, source: "api-key", expiresAt: null };
   }
